@@ -332,7 +332,7 @@ int main(int ac, char *av[])
     BoundingBoxd system_domain_bounds(Vec2d(-BW, -BW), Vec2d(DL + BW, DH + BW));
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
     sph_system.setRunParticleRelaxation(false);
-    sph_system.setReloadParticles(true);
+    sph_system.setReloadParticles(false);
     //sph_system.setRunParticleRelaxation(true);
     //sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
@@ -467,6 +467,9 @@ int main(int ac, char *av[])
      //定义全局坐标系总粘性力/压力力的统计
     ReducedQuantityRecording<QuantitySummation<Vecd>> write_total_viscous_force_global(cylinder, "ViscousForceFromFluid");
     ReducedQuantityRecording<QuantitySummation<Vecd>> write_total_pressure_force_global(cylinder, "PressureForceFromFluid");
+
+    ReduceDynamics<QuantitySummation<Vecd>> calculate_cylinder_total_pressure_force(cylinder, "PressureForceFromFluid");
+    ReduceDynamics<QuantitySummation<Vecd>> calculate_cylinder_total_viscous_force(cylinder, "ViscousForceFromFluid");
     //----------------------------------------------------------------------
     //	Define the configuration related particles dynamics.
     //----------------------------------------------------------------------
@@ -601,10 +604,12 @@ int main(int ac, char *av[])
             transport_velocity_correction.exec();
             interval_computing_time_step += TickCount::now() - time_instance;
 
+            /** Viscous force exerting on flap. */
+            viscous_force_from_fluid.exec();
             time_instance = TickCount::now();
+
             Real relaxation_time = 0.0;
             Real dt = 0.0;
-
 
             while (relaxation_time < Dt)
             {
@@ -669,28 +674,12 @@ int main(int ac, char *av[])
         write_total_viscous_force_global.writeToFile(number_of_iterations); // 记录结果到文件
         write_total_pressure_force_global.writeToFile(number_of_iterations);
 
-        Real cylinder_rot_angle = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState()); // 获取圆柱实时旋转角度
-        // 获取粒子数据
-        Vec2d total_viscous_force_g(0.0, 0.0);
-        Vec2d total_pressure_force_g(0.0, 0.0);
-
-        BaseParticles &cylinder_particles = cylinder.getBaseParticles();
-        size_t total_real_particles = cylinder_particles.TotalRealParticles();
-
-        auto viscous_force_data = cylinder_particles.getVariableDataByName<Vecd>("ViscousForceFromFluid");
-        auto pressure_force_data = cylinder_particles.getVariableDataByName<Vecd>("PressureForceFromFluid");
-        for (size_t i = 0; i < total_real_particles; ++i)
-        {
-            total_viscous_force_g += viscous_force_data[i];
-            total_pressure_force_g += pressure_force_data[i];
-        }
-
+        Vec2d total_viscous_force_g = calculate_cylinder_total_viscous_force.exec();
+        Vec2d total_pressure_force_g = calculate_cylinder_total_pressure_force.exec();
         Real current_rotation_from_matrix = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState());
         Real total_rotation_angle = initial_rotation_angle + current_rotation_from_matrix;
-        Real angular_velocity = tethered_spot.getU(integ.getAdvancedState())[0];
         Vec2d viscous_local = transformGlobalForceToLocal(total_viscous_force_g, total_rotation_angle);
         Vec2d pressure_local = transformGlobalForceToLocal(total_pressure_force_g, total_rotation_angle);
-
 
         //  获取前段中心观测点位置
         auto &front_center_particles = front_center_observer.getBaseParticles();
@@ -702,8 +691,6 @@ int main(int ac, char *av[])
                                  viscous_local,          // 局部压力力X
                                  pressure_local,       // 新增局部力Y
                                  front_center_pos);
-        write_total_viscous_force_global.writeToFile(number_of_iterations);
-        write_total_pressure_force_global.writeToFile(number_of_iterations);
         TickCount t3 = TickCount::now();
         interval += t3 - t2;
     }
