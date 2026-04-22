@@ -27,7 +27,7 @@ Vec2d cylinder_center(0.05 * DL, LH + 0.2);               /**< Location of the c
 Real initial_speed = 70;                        /**< Initial velocity magnitude (m/s). */
 Real initial_angle = -20 * Pi / 180.0;          /**< Initial velocity angle (radians, negative = downward). */
 Real initial_rotation_angle = -20 * Pi / 180.0; /**< Initial body rotation (radians). */
-Real initial_angular_velocity = 0.0; // 可选：初始角速度（rad/s）（如果需要旋转入水，可设置）
+//Real initial_angular_velocity = 0.0; // 可选：初始角速度（rad/s）（如果需要旋转入水，可设置）
 //----------------------------------------------------------------------
 //	Material parameters.
 //----------------------------------------------------------------------
@@ -72,7 +72,8 @@ Vecd resetFrontCenterObserverPosition()
 {
     Vec2d front_center_initial(0.2780, -0.01055);
     Vec2d rotation_radius = front_center_initial - centroid;
-    Vec2d front_center_rotated = initial_rotation_angle * rotation_radius;
+    Rotation2d rotation(initial_rotation_angle); 
+    Vec2d front_center_rotated = rotation * rotation_radius;
     // here the cylinder center should be the relativa distance to the global center.
     Vec2d front_center_translated = front_center_rotated + cylinder_center; 
     return front_center_translated;
@@ -133,7 +134,7 @@ class SummaryOutput
 
     {
         Real total_force_local_x = viscous_local[0] + pressure_local[0];
-        Real total_force_local_y = viscous_local[1] + pressure_local[1]; // 新增
+        Real total_force_local_y = viscous_local[1] + pressure_local[1]; 
 
         output_file_ << std::scientific << std::setprecision(9)
                      << time << " "
@@ -249,9 +250,10 @@ class ObjectBody : public MultiPolygonShape
     {
         std::vector<Vec2d> oringial_shape = createObjectShape();
         std::vector<Vec2d> transformed_shape;
+        Rotation2d rotation(initial_rotation_angle);
         for (const auto& oringial_point : oringial_shape)
         {
-            Vec2d rotated_point = initial_rotation_angle * (oringial_point - centroid) + centroid;
+            Vec2d rotated_point = rotation * (oringial_point - centroid) + centroid;
             // here the cylinder center should be the relativa distance to the global center.
             Vec2d final_point = rotated_point + cylinder_center; 
             transformed_shape.push_back(final_point);
@@ -288,11 +290,12 @@ using CylinderFluidDiffusionDirichlet =
 MultiPolygon createSimbodyConstrainShape(SPHBody& sph_body)
 {
     MultiPolygon multi_polygon;
+    Rotation2d rotation(initial_rotation_angle);
     std::vector<Vec2d> oringial_shape = createObjectShape();
     std::vector<Vec2d> transformed_shape;
     for (const auto &oringial_point : oringial_shape)
     {
-        Vec2d rotated_point = initial_rotation_angle * (oringial_point - centroid) + centroid;
+        Vec2d rotated_point = rotation * (oringial_point - centroid) + centroid;
         // here the cylinder center should be the relativa distance to the global center.
         Vec2d final_point = rotated_point + cylinder_center;
         transformed_shape.push_back(final_point);
@@ -330,6 +333,8 @@ int main(int ac, char *av[])
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
     sph_system.setRunParticleRelaxation(false);
     sph_system.setReloadParticles(true);
+    //sph_system.setRunParticleRelaxation(true);
+    //sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
     //----------------------------------------------------------------------
     //	Creating bodies with corresponding materials and particles.2. 创建体（流体、壁面、圆柱）
@@ -357,9 +362,10 @@ int main(int ac, char *av[])
     cylinder_particles.registerStateVariableData<Vecd>("Velocity");
     cylinder_particles.registerStateVariableData<Real>("AngularVelocity");
 
-    // 前段中心观测体（仿照OWSC的ObserverBody）
+    // 前段中心观测体
     ObserverBody front_center_observer(sph_system, "FrontCenterObserver");
-    front_center_observer.generateParticles<ObserverParticles>(front_center_observer_location);
+    StdVec<Vecd> front_center_positions = {front_center_observer_location};
+    front_center_observer.generateParticles<ObserverParticles>(front_center_positions);
     //----------------------------------------------------------------------
     //	Define body relation map.
     //	The contact map gives the topological connections between the bodies.
@@ -501,10 +507,11 @@ int main(int ac, char *av[])
 
     state.updQ()[0] = displacement0[0];       // x位移（从系留点到质心）
     state.updQ()[1] = displacement0[1];       // y位移（从系留点到质心）
-    state.updQ()[2] = initial_rotation_angle; // 相对于父体的旋转
+    //state.updQ()[2] = initial_rotation_angle; // 相对于父体的旋转
+    state.updQ()[2] = 0.0;
 
     SimTK::Vec3 mobilizer_vel(0.0, initial_speed * cos(initial_angle), initial_speed * sin(initial_angle)); // 初始速度（U）：通过Mobilizer的setU方法设置初始速度
-
+    tethered_spot.setU(state, mobilizer_vel);                                                               // 设置初始速度（U）
     // 设置完Q/U后，需要让Simbody重新感知状态
     MBsystem.realize(state, SimTK::Stage::Velocity);
     MBsystem.realize(state, SimTK::Stage::Acceleration);
@@ -558,7 +565,7 @@ int main(int ac, char *av[])
     int observation_sample_interval = screen_output_interval * 1;
     int restart_output_interval = screen_output_interval * 500;
     Real end_time = 0.02;
-    Real output_interval = end_time / 200.0;
+    Real output_interval = end_time / 50.0;
     //----------------------------------------------------------------------
     //	Statistics for CPU time
     //----------------------------------------------------------------------
@@ -604,12 +611,13 @@ int main(int ac, char *av[])
                 /** inner loop for dual-time criteria time-stepping.  */
                 dt = SMIN(SMIN(dt_thermal, fluid_acoustic_time_step.exec()), Dt);
                 fluid_pressure_relaxation.exec(dt);
+                pressure_force_from_fluid.exec();
                 fluid_density_relaxation.exec(dt);
                 cylinder_wetting.exec(dt);
 
                 integ.stepBy(dt);
                 SimTK::State &state_for_update = integ.updAdvancedState();
-                force_on_bodies.clearAllBodyForces(state_for_update);
+                force_on_bodies.clearAllBodyForces(state_for_update);//The gravity on the object was removed.
                 force_on_bodies.setOneBodyForce(state_for_update, tethered_spot, force_on_tethered_spot.exec());
                 constraint_tethered_spot.exec();
 
@@ -656,9 +664,44 @@ int main(int ac, char *av[])
         body_states_recording.writeToFile();
         viscous_force_from_fluid.exec();
         pressure_force_from_fluid.exec();
+        SimTK::State &output_state = integ.updAdvancedState();
+
+        write_total_viscous_force_global.writeToFile(number_of_iterations); // 记录结果到文件
+        write_total_pressure_force_global.writeToFile(number_of_iterations);
+
+        Real cylinder_rot_angle = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState()); // 获取圆柱实时旋转角度
+        // 获取粒子数据
+        Vec2d total_viscous_force_g(0.0, 0.0);
+        Vec2d total_pressure_force_g(0.0, 0.0);
+
+        BaseParticles &cylinder_particles = cylinder.getBaseParticles();
+        size_t total_real_particles = cylinder_particles.TotalRealParticles();
+
+        auto viscous_force_data = cylinder_particles.getVariableDataByName<Vecd>("ViscousForceFromFluid");
+        auto pressure_force_data = cylinder_particles.getVariableDataByName<Vecd>("PressureForceFromFluid");
+        for (size_t i = 0; i < total_real_particles; ++i)
+        {
+            total_viscous_force_g += viscous_force_data[i];
+            total_pressure_force_g += pressure_force_data[i];
+        }
+
+        Real current_rotation_from_matrix = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState());
+        Real total_rotation_angle = initial_rotation_angle + current_rotation_from_matrix;
+        Real angular_velocity = tethered_spot.getU(integ.getAdvancedState())[0];
+        Vec2d viscous_local = transformGlobalForceToLocal(total_viscous_force_g, total_rotation_angle);
+        Vec2d pressure_local = transformGlobalForceToLocal(total_pressure_force_g, total_rotation_angle);
 
 
+        //  获取前段中心观测点位置
+        auto &front_center_particles = front_center_observer.getBaseParticles();
+        Vecd front_center_pos = front_center_particles.getVariableDataByName<Vecd>("Position")[0];
 
+        summary_output.writeData(physical_time,
+                                 total_viscous_force_g,  // 全局粘性力
+                                 total_pressure_force_g, // 全局压力力
+                                 viscous_local,          // 局部压力力X
+                                 pressure_local,       // 新增局部力Y
+                                 front_center_pos);
         write_total_viscous_force_global.writeToFile(number_of_iterations);
         write_total_pressure_force_global.writeToFile(number_of_iterations);
         TickCount t3 = TickCount::now();
@@ -685,56 +728,6 @@ int main(int ac, char *av[])
 
 
 
-                SimTK::State &output_state = integ.updAdvancedState();
 
-write_total_viscous_force_global.writeToFile(number_of_iterations); // 记录结果到文件
-write_total_pressure_force_global.writeToFile(number_of_iterations);
-
-Real cylinder_rot_angle = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState()); // 获取圆柱实时旋转角度
-// 获取粒子数据
-Vec2d total_viscous_force_g(0.0, 0.0);
-Vec2d total_pressure_force_g(0.0, 0.0);
-
-BaseParticles &cylinder_particles = cylinder.getBaseParticles();
-size_t total_real_particles = cylinder_particles.TotalRealParticles();
-
-auto viscous_force_data = cylinder_particles.getVariableDataByName<Vecd>("ViscousForceFromFluid");
-auto pressure_force_data = cylinder_particles.getVariableDataByName<Vecd>("PressureForceFromFluid");
-for (size_t i = 0; i < total_real_particles; ++i)
-{
-    total_viscous_force_g += viscous_force_data[i];
-    total_pressure_force_g += pressure_force_data[i];
-}
-
-Real current_rotation_from_matrix = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState());
-Real total_rotation_angle = initial_rotation_angle + current_rotation_from_matrix;
-Real angular_velocity = tethered_spot.getU(integ.getAdvancedState())[0];
-Real viscous_local_x = transformGlobalForceToLocalX(total_viscous_force_g, total_rotation_angle);
-Real pressure_local_x = transformGlobalForceToLocalX(total_pressure_force_g, total_rotation_angle);
-// 新增 Y 方向力计算
-Real viscous_local_y = transformGlobalForceToLocalY(total_viscous_force_g, total_rotation_angle);
-Real pressure_local_y = transformGlobalForceToLocalY(total_pressure_force_g, total_rotation_angle);
-
-// 输出到文件
-local_force_file << std::fixed << std::setprecision(9)
-                 << physical_time << "\t"
-                 << viscous_local_x << "\t"
-                 << pressure_local_x << "\t"
-                 << (viscous_local_x + pressure_local_x) << "\n";
-local_force_file.flush();
-
-//  获取前段中心观测点位置
-auto &front_center_particles = front_center_observer.getBaseParticles();
-Vecd front_center_pos = front_center_particles.getVariableDataByName<Vecd>("Position")[0];
-
-summary_output.writeData(physical_time,
-                         total_viscous_force_g,  // 全局粘性力
-                         total_pressure_force_g, // 全局压力力
-                         viscous_local_x,        // 局部粘性力X
-                         pressure_local_x,       // 局部压力力X
-                         viscous_local_y,        // 新增局部力Y
-                         pressure_local_y,       // 新增局部力Y
-                         front_center_pos);
-}
           
 
