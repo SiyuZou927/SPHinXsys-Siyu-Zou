@@ -21,7 +21,7 @@ Real DH = 5;                                              /**< Water tank height
 Real LH = 2;                                              /**< Water column height. */
 Real particle_spacing_ref = 0.005;                        /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4;                       /**< Thickness of tank wall. */
-Vec2d cylinder_center(0.05 * DL, LH + 0.2);               /**< Location of the cylinder center. */
+Vec2d cylinder_center(0.45 * DL, LH + 0.2);               /**< Location of the cylinder center. */
 
 // 初始速度参数
 Real initial_speed = 70;                        /**< Initial velocity magnitude (m/s). */
@@ -332,7 +332,7 @@ int main(int ac, char *av[])
     BoundingBoxd system_domain_bounds(Vec2d(-BW, -BW), Vec2d(DL + BW, DH + BW));
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
     sph_system.setRunParticleRelaxation(false);
-    sph_system.setReloadParticles(false);
+    sph_system.setReloadParticles(true);
     //sph_system.setRunParticleRelaxation(true);
     //sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
@@ -448,9 +448,9 @@ int main(int ac, char *av[])
     SimpleDynamics<NormalDirectionFromBodyShape> cylinder_normal_direction(cylinder);
 
     /** Kernel correction matrix and transport velocity formulation. */
-    //InteractionWithUpdate<LinearGradientCorrectionMatrixComplex> kernel_correction_complex(DynamicsArgs(water_block_inner, 0.9), water_block_contact);
-    Dynamics1Level<fluid_dynamics::Integration1stHalfWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
-    //Dynamics1Level<fluid_dynamics::Integration1stHalfCorrectionWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);// with KGC correction
+    InteractionWithUpdate<LinearGradientCorrectionMatrixComplex> kernel_correction_complex(DynamicsArgs(water_block_inner, 0.5), water_block_contact);
+    //Dynamics1Level<fluid_dynamics::Integration1stHalfWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
+    Dynamics1Level<fluid_dynamics::Integration1stHalfCorrectionWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);// with KGC correction
     Dynamics1Level<fluid_dynamics::Integration2ndHalfWithWallRiemann> fluid_density_relaxation(water_block_inner, water_block_contact);
     InteractionWithUpdate<fluid_dynamics::DensitySummationComplexFreeSurface> fluid_density_by_summation(water_block_inner, water_block_contact);
     InteractionWithUpdate<fluid_dynamics::ViscousForceWithWall> viscous_force(water_block_inner, water_block_contact);
@@ -486,8 +486,14 @@ int main(int ac, char *av[])
     SimTK::Body::Rigid fixed_spot_info(SimTK::MassProperties(1.0, SimTKVec3(0), SimTK::UnitInertia(1)));
     SolidBodyPartForSimbody cylinder_constraint_area(cylinder, makeShared<MultiPolygonShape>(createSimbodyConstrainShape(cylinder), "cylinder"));
     /** Mass properties of the constrained spot. */
-    SimTK::Body::Rigid tethered_spot_info(*cylinder_constraint_area.body_part_mass_properties_);
+    //SimTK::Body::Rigid tethered_spot_info(*cylinder_constraint_area.body_part_mass_properties_); // origin tethered spot mass properties
     Vec2d tethering_point = cylinder_constraint_area.initial_mass_center_;
+    SimTK::MassProperties cylinder_mass_props(                                  // set tethered spot mass properties
+        cylinder_constraint_area.body_part_mass_properties_->getMass(),         // 保留原质量
+        SimTKVec3(tethering_point[0], tethering_point[1], 0.0),                 // 强制质心为tethering_point
+        cylinder_constraint_area.body_part_mass_properties_->getUnitInertia()); // 保留原转动惯量
+    SimTK::Body::Rigid tethered_spot_info(cylinder_mass_props);                 // use the modified mass properties for the tethered spot
+
     /** Mobility of the fixed spot. */
     SimTK::MobilizedBody::Weld fixed_spot(matter.Ground(), SimTK::Transform(SimTKVec3(tethering_point[0], tethering_point[1], 0.0)),
                                           fixed_spot_info, SimTK::Transform(SimTKVec3(0)));
@@ -567,8 +573,11 @@ int main(int ac, char *av[])
     int screen_output_interval = 1;
     int observation_sample_interval = screen_output_interval * 1;
     int restart_output_interval = screen_output_interval * 500;
-    Real end_time = 0.02;
-    Real output_interval = end_time / 50.0;
+    Real end_time = 0.01;
+    Real output_interval_vtp = end_time / 20.0;
+    Real output_interval_force = end_time / 500.0;
+    Real next_force_output = output_interval_force;
+    Real next_vtp_output = output_interval_vtp;
     //----------------------------------------------------------------------
     //	Statistics for CPU time
     //----------------------------------------------------------------------
@@ -590,114 +599,133 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     while (physical_time < end_time)
     {
+        Real next_output_time = std::min(next_force_output, next_vtp_output);
+        Real time_to_output = next_output_time - physical_time;
+        if (time_to_output < 0)
+            time_to_output = 0.0;
+        Real target_time = std::min(time_to_output, end_time - physical_time);
+
         Real integration_time = 0.0;
-
         /** Integrate time (loop) until the next output time. */
-        while (integration_time < output_interval)
+        while (integration_time < target_time)
         {
-            /** outer loop for dual-time criteria time-stepping. */
-            time_instance = TickCount::now();
-            Real Dt = fluid_advection_time_step.exec();
+                /** outer loop for dual-time criteria time-stepping. */
+                time_instance = TickCount::now();
+                Real Dt = fluid_advection_time_step.exec();
 
-            fluid_density_by_summation.exec();
-            viscous_force.exec();
-            transport_velocity_correction.exec();
-            interval_computing_time_step += TickCount::now() - time_instance;
+                fluid_density_by_summation.exec();
+                viscous_force.exec();
+                kernel_correction_complex.exec(); // with KGC correction
+                transport_velocity_correction.exec();
+                interval_computing_time_step += TickCount::now() - time_instance;
 
-            /** Viscous force exerting on flap. */
-            viscous_force_from_fluid.exec();
-            time_instance = TickCount::now();
+                /** Viscous force exerting on flap. */
 
-            Real relaxation_time = 0.0;
-            Real dt = 0.0;
-
-            while (relaxation_time < Dt)
-            {
-                /** inner loop for dual-time criteria time-stepping.  */
-                dt = SMIN(SMIN(dt_thermal, fluid_acoustic_time_step.exec()), Dt);
-                fluid_pressure_relaxation.exec(dt);
-                pressure_force_from_fluid.exec();
-                fluid_density_relaxation.exec(dt);
-                cylinder_wetting.exec(dt);
-
-                integ.stepBy(dt);
-                SimTK::State &state_for_update = integ.updAdvancedState();
-                force_on_bodies.clearAllBodyForces(state_for_update);//The gravity on the object was removed.
-                force_on_bodies.setOneBodyForce(state_for_update, tethered_spot, force_on_tethered_spot.exec());
-                constraint_tethered_spot.exec();
-
-                relaxation_time += dt;
-                integration_time += dt;
-                physical_time += dt;
-            }
-            interval_computing_fluid_pressure_relaxation += TickCount::now() - time_instance;
-
-            /** screen output, write body reduced values and restart files  */
-            if (number_of_iterations % screen_output_interval == 0)
-            {
-                std::cout << std::fixed << std::setprecision(9) << "N=" << number_of_iterations << "	Time = "
-                          << physical_time
-                          << "	Dt = " << Dt << "	dt = " << dt << "\n";
-
-                if (number_of_iterations % observation_sample_interval == 0 && number_of_iterations != sph_system.RestartStep())
+                time_instance = TickCount::now();
+                Real relaxation_time = 0.0;
+                Real dt = 0.0;
+                viscous_force_from_fluid.exec();
+                while (relaxation_time < Dt)
                 {
-                    write_cylinder_wetting.writeToFile(number_of_iterations);
-                    write_front_center_position.writeToFile(number_of_iterations);
+                    /** inner loop for dual-time criteria time-stepping.  */
+                    dt = SMIN(SMIN(dt_thermal, fluid_acoustic_time_step.exec()), Dt);
+                    fluid_pressure_relaxation.exec(dt);
+                    pressure_force_from_fluid.exec();
+                    fluid_density_relaxation.exec(dt);
+                    cylinder_wetting.exec(dt);
+
+                    integ.stepBy(dt);
+                    SimTK::State &state_for_update = integ.updAdvancedState();
+                    force_on_bodies.clearAllBodyForces(state_for_update); // The gravity on the object was removed.
+                    force_on_bodies.setOneBodyForce(state_for_update, tethered_spot, force_on_tethered_spot.exec());
+                    constraint_tethered_spot.exec();
+
+                    relaxation_time += dt;
+                    integration_time += dt;
+                    physical_time += dt;
                 }
-                if (number_of_iterations % restart_output_interval == 0)
-                    restart_io.writeToFile(number_of_iterations);
-            }
-            number_of_iterations++;
+                interval_computing_fluid_pressure_relaxation += TickCount::now() - time_instance;
 
-            /** Update cell linked list and configuration. */
-            time_instance = TickCount::now();
-            if (number_of_iterations % 100 == 0 && number_of_iterations != 1)
-            {
-                particle_sorting.exec();
+                /** screen output, write body reduced values and restart files  */
+                if (number_of_iterations % screen_output_interval == 0)
+                {
+                    std::cout << std::fixed << std::setprecision(9) << "N=" << number_of_iterations << "	Time = "
+                              << physical_time
+                              << "	Dt = " << Dt << "	dt = " << dt << "\n";
+
+                    if (number_of_iterations % observation_sample_interval == 0 && number_of_iterations != sph_system.RestartStep())
+                    {
+                        write_cylinder_wetting.writeToFile(number_of_iterations);
+                        write_front_center_position.writeToFile(number_of_iterations);
+                    }
+                    if (number_of_iterations % restart_output_interval == 0)
+                        restart_io.writeToFile(number_of_iterations);
+                }
+                number_of_iterations++;
+
+                /** Update cell linked list and configuration. */
+                time_instance = TickCount::now();
+                if (number_of_iterations % 100 == 0 && number_of_iterations != 1)
+                {
+                    particle_sorting.exec();
+                }
+                water_block.updateCellLinkedList();
+                cylinder.updateCellLinkedList();
+                water_block_inner.updateConfiguration(); // 更新观测体的网格
+                cylinder_inner.updateConfiguration();
+                cylinder_contact.updateConfiguration();
+                water_block_complex.updateConfiguration();
+                front_center_observer_contact.updateConfiguration(); // 更新前段中心观测点的配置
+                free_stream_surface_indicator.exec();
+                interval_updating_configuration += TickCount::now() - time_instance;
             }
-            water_block.updateCellLinkedList();
-            cylinder.updateCellLinkedList();
-            water_block_inner.updateConfiguration();// 更新观测体的网格
-            cylinder_inner.updateConfiguration();
-            cylinder_contact.updateConfiguration();
-            water_block_complex.updateConfiguration();
-            front_center_observer_contact.updateConfiguration();//更新前段中心观测点的配置
-            free_stream_surface_indicator.exec();
-            interval_updating_configuration += TickCount::now() - time_instance;
+        if (physical_time >= next_force_output)
+        {
+            TickCount t2 = TickCount::now();
+           
+            viscous_force_from_fluid.exec();
+            pressure_force_from_fluid.exec();
+            SimTK::State &output_state = integ.updAdvancedState();
+
+            write_total_viscous_force_global.writeToFile(number_of_iterations); // 记录结果到文件
+            write_total_pressure_force_global.writeToFile(number_of_iterations);
+
+            Vec2d total_viscous_force_g = calculate_cylinder_total_viscous_force.exec();
+            Vec2d total_pressure_force_g = calculate_cylinder_total_pressure_force.exec();
+            Real current_rotation_from_matrix = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState());
+            Real total_rotation_angle = initial_rotation_angle + current_rotation_from_matrix;
+            Vec2d viscous_local = transformGlobalForceToLocal(total_viscous_force_g, total_rotation_angle);
+            Vec2d pressure_local = transformGlobalForceToLocal(total_pressure_force_g, total_rotation_angle);
+
+            //  获取前段中心观测点位置
+            auto &front_center_particles = front_center_observer.getBaseParticles();
+            Vecd front_center_pos = front_center_particles.getVariableDataByName<Vecd>("Position")[0];
+
+            summary_output.writeData(physical_time,
+                                     total_viscous_force_g,  // 全局粘性力
+                                     total_pressure_force_g, // 全局压力力
+                                     viscous_local,          // 局部压力力X
+                                     pressure_local,         // 新增局部力Y
+                                     front_center_pos);
+            TickCount t3 = TickCount::now();
+            interval += t3 - t2;
+            next_force_output += output_interval_force;
         }
-        TickCount t2 = TickCount::now();
+        if (physical_time >= next_vtp_output )
+        {
+        TickCount t4 = TickCount::now();
+
         body_states_recording.writeToFile();
-        viscous_force_from_fluid.exec();
-        pressure_force_from_fluid.exec();
-        SimTK::State &output_state = integ.updAdvancedState();
 
-        write_total_viscous_force_global.writeToFile(number_of_iterations); // 记录结果到文件
-        write_total_pressure_force_global.writeToFile(number_of_iterations);
-
-        Vec2d total_viscous_force_g = calculate_cylinder_total_viscous_force.exec();
-        Vec2d total_pressure_force_g = calculate_cylinder_total_pressure_force.exec();
-        Real current_rotation_from_matrix = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState());
-        Real total_rotation_angle = initial_rotation_angle + current_rotation_from_matrix;
-        Vec2d viscous_local = transformGlobalForceToLocal(total_viscous_force_g, total_rotation_angle);
-        Vec2d pressure_local = transformGlobalForceToLocal(total_pressure_force_g, total_rotation_angle);
-
-        //  获取前段中心观测点位置
-        auto &front_center_particles = front_center_observer.getBaseParticles();
-        Vecd front_center_pos = front_center_particles.getVariableDataByName<Vecd>("Position")[0];
-
-        summary_output.writeData(physical_time,
-                                 total_viscous_force_g,  // 全局粘性力
-                                 total_pressure_force_g, // 全局压力力
-                                 viscous_local,          // 局部压力力X
-                                 pressure_local,       // 新增局部力Y
-                                 front_center_pos);
-        TickCount t3 = TickCount::now();
-        interval += t3 - t2;
+        TickCount t5 = TickCount::now();
+        interval += t5 - t4;
+        next_vtp_output += output_interval_vtp;
+        }
     }
-    TickCount t4 = TickCount::now();
+    TickCount t6 = TickCount::now();
 
     TimeInterval tt;
-    tt = t4 - t1 - interval;
+    tt = t6 - t1 - interval;
     std::cout << "Total wall time for computation: " << tt.seconds()
               << " seconds." << std::endl;
     std::cout << std::fixed << std::setprecision(9) << "interval_computing_time_step ="
