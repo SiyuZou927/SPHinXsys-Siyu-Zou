@@ -11,19 +11,19 @@ using namespace SPH;   // Namespace cite here.
 //----------------------------------------------------------------------
 //  Basic geometry parameters and numerical setup.
 //----------------------------------------------------------------------
-Real DL = 1.5; /**< Water tank length. */
-Real DW = 0.8; /**< Water tank width. */
-Real DH = 1.5; /**< Water tank height. */
-Real LH = 1.0; /**< Water column height. */
+Real DL = 1.2; /**< Water tank length. */
+Real DW = 0.4; /**< Water tank width. */
+Real DH = 1.0; /**< Water tank height. */
+Real LH = 0.5; /**< Water column height. */
 
-Real particle_spacing_ref = 0.02;   /**< Initial reference particle spacing. */
+Real particle_spacing_ref = 0.0025;   /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4; /**< Thickness of tank wall. */
 Vecd object_center(0.46, LH + 0.028, DW / 2); /**< Location of the object center. */
 // 初始速度参数
 Real initial_speed = 70.0;                     /**< Initial velocity magnitude (m/s). */
 Real initial_angle = -20.0 * Pi / 180.0;       /**< Initial velocity angle (radians, negative = downward). */
 Real initial_pitch_angle = -20.0 * Pi / 180.0; /**< Initial pitch angle about Z-axis(radians). */
-std::string full_path_to_file = "./input/M1TR4Z04H1.stl"; // model file path
+std::string full_path_to_file = "./input/M1TR4Z02H05.stl"; // model file path
 //----------------------------------------------------------------------
 //  Material parameters.
 //----------------------------------------------------------------------
@@ -37,11 +37,10 @@ Real mu_f = 8.9e-7;                           /**< Water dynamics viscosity (Pa�
 //  Wetting parameters
 //----------------------------------------------------------------------
 std::string diffusion_species_name = "Phi";
-Real diffusion_coeff = 0.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. */
+Real diffusion_coeff = 75.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. */
 Real fluid_moisture = 1.0;                                   /**< fluid moisture. */
 Real object_moisture = 0.0;                                  /**< object moisture. */
 Real wall_moisture = 1.0;                                    /**< wall moisture. */
-
 //----------------------------------------------------------------------
 //  全局力到局部坐标系的转换
 //----------------------------------------------------------------------
@@ -231,10 +230,10 @@ int main(int ac, char *av[])
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
 
     // 运行配置
-    sph_system.setRunParticleRelaxation(false);
-    sph_system.setReloadParticles(true);
-    //sph_system.setRunParticleRelaxation(true);
-    //sph_system.setReloadParticles(false);
+    //sph_system.setRunParticleRelaxation(false);
+    //sph_system.setReloadParticles(true);
+    sph_system.setRunParticleRelaxation(true);
+    sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
 
     //----------------------------------------------------------------------
@@ -250,7 +249,7 @@ int main(int ac, char *av[])
     wall_boundary.generateParticles<BaseParticles, Lattice>();
 
     SolidBody floating_object(sph_system, makeShared<FloatingObject>("FloatingObject"));
-    floating_object.defineAdaptationRatios(1.15, 4.0);//Multi-resolution
+    floating_object.defineAdaptationRatios(1.15, 2.0);//Multi-resolution
     floating_object.defineBodyLevelSetShape();
 
     // 定义材料，包含湿表面扩散
@@ -280,6 +279,10 @@ int main(int ac, char *av[])
     ContactRelation object_observer_contact(leading_edge_observer, {&floating_object});
     ContactRelation wetting_observer_contact(leading_edge_observer, {&floating_object});
     ContactRelation leading_edge_observer_contact(leading_edge_observer, {&floating_object});
+    //----------------------------------------------------------------------
+    // Combined relations built from basic relations
+    // which is only used for update configuration.
+    //----------------------------------------------------------------------
     ComplexRelation water_block_complex(water_block_inner, water_block_contact);
 
      //----------------------------------------------------------------------
@@ -346,6 +349,7 @@ int main(int ac, char *av[])
     InteractionWithUpdate<WettingCoupledSpatialTemporalFreeSurfaceIndicationComplex>
         free_stream_surface_indicator(water_block_inner, water_block_contact);
 
+
     // 法向计算
     SimpleDynamics<NormalDirectionFromBodyShape> wall_boundary_normal_direction(wall_boundary);
     SimpleDynamics<NormalDirectionFromBodyShape> object_normal_direction(floating_object);
@@ -354,16 +358,15 @@ int main(int ac, char *av[])
     Dynamics1Level<fluid_dynamics::Integration1stHalfCorrectionWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
     // 流体动力学
     //Dynamics1Level<fluid_dynamics::Integration1stHalfWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
+
     Dynamics1Level<fluid_dynamics::Integration2ndHalfWithWallRiemann> fluid_density_relaxation(water_block_inner, water_block_contact);
     InteractionWithUpdate<fluid_dynamics::DensitySummationComplexFreeSurface> fluid_density_by_summation(water_block_inner, water_block_contact);
     InteractionWithUpdate<fluid_dynamics::ViscousForceWithWall>viscous_force(water_block_inner, water_block_contact);
     InteractionWithUpdate<fluid_dynamics::TransportVelocityCorrectionComplex<BulkParticles>>transport_velocity_correction(water_block_inner, water_block_contact);
     // periodic condition
     PeriodicAlongAxis periodic_along_x(water_block.getSPHBodyBounds(), xAxis);
-    //PeriodicAlongAxis periodic_along_y(water_block.getSPHBodyBounds(), yAxis);
     PeriodicAlongAxis periodic_along_z(water_block.getSPHBodyBounds(), zAxis);
     PeriodicConditionUsingCellLinkedList periodic_condition_x(water_block, periodic_along_x);
-    //PeriodicConditionUsingCellLinkedList periodic_condition_y(water_block, periodic_along_y);
     PeriodicConditionUsingCellLinkedList periodic_condition_z(water_block, periodic_along_z);
     // 时间步控制
     ReduceDynamics<fluid_dynamics::AdvectionViscousTimeStep> fluid_advection_time_step(water_block, U_max);
@@ -407,7 +410,7 @@ int main(int ac, char *av[])
     SimTK::MobilizedBody::Weld fixed_spot(matter.Ground(), SimTK::Transform(SimTKVec3(tethering_point[0], tethering_point[1], 0.0)),
                                           fixed_spot_info, SimTK::Transform(SimTKVec3(0)));
 
-   Vecd displacement0 = structure_system.initial_mass_center_ - tethering_point;
+    Vecd displacement0 = structure_system.initial_mass_center_ - tethering_point;
     SimTK::MobilizedBody::Planar structure_mob(matter.Ground(),
                                               SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], displacement0[2])),
                                               tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
@@ -479,8 +482,8 @@ int main(int ac, char *av[])
     size_t number_of_iterations = 0;
     int screen_output_interval = 1;
     int observation_sample_interval = screen_output_interval * 1;
-    Real end_time = 0.015; 
-    Real output_interval_vtp = end_time / 20.0;
+    Real end_time = 0.009; 
+    Real output_interval_vtp = end_time / 12.0;
     Real output_interval_force = end_time / 500.0;
     Real next_force_output = output_interval_force;
     Real next_vtp_output = output_interval_vtp;
@@ -547,8 +550,7 @@ int main(int ac, char *av[])
                 integ.stepBy(dt);
                 SimTK::State &state_for_update = integ.updAdvancedState();
                 force_on_bodies.clearAllBodyForces(state_for_update);
-                force_on_bodies.setOneBodyForce(state_for_update, structure_mob,
-                                                force_on_structure.exec());
+                force_on_bodies.setOneBodyForce(state_for_update, structure_mob,force_on_structure.exec());
                 constraint_on_structure.exec();
 
                 relaxation_time += dt;
