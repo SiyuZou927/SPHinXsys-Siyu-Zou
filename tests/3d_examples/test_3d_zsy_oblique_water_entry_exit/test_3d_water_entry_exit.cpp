@@ -16,10 +16,10 @@ Real DW = 0.4; /**< Water tank width. */
 Real DH = 1.0; /**< Water tank height. */
 Real LH = 0.5; /**< Water column height. */
 
-Real particle_spacing_ref = 0.0025;   /**< Initial reference particle spacing. */
+Real particle_spacing_ref = 0.003;   /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4; /**< Thickness of tank wall. */
 Vecd object_center(0.46, LH + 0.028, DW / 2); /**< Location of the object center. */
-// 初始速度参数
+
 Real initial_speed = 70.0;                     /**< Initial velocity magnitude (m/s). */
 Real initial_angle = -20.0 * Pi / 180.0;       /**< Initial velocity angle (radians, negative = downward). */
 Real initial_pitch_angle = -20.0 * Pi / 180.0; /**< Initial pitch angle about Z-axis(radians). */
@@ -37,7 +37,7 @@ Real mu_f = 8.9e-7;                           /**< Water dynamics viscosity (Pa�
 //  Wetting parameters
 //----------------------------------------------------------------------
 std::string diffusion_species_name = "Phi";
-Real diffusion_coeff = 75.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. */
+Real diffusion_coeff = 25.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. */
 Real fluid_moisture = 1.0;                                   /**< fluid moisture. */
 Real object_moisture = 0.0;                                  /**< object moisture. */
 Real wall_moisture = 1.0;                                    /**< wall moisture. */
@@ -49,8 +49,8 @@ Vec3d transformGlobalForceToLocal(const Vec3d &global_force, Real rotation_angle
     Real cos_theta = cos(rotation_angle_z);
     Real sin_theta = sin(rotation_angle_z);
     Vec3d local_force;
-    local_force[0] = global_force[0] * cos_theta + global_force[1] * sin_theta;  // X方向
-    local_force[1] = -global_force[0] * sin_theta + global_force[1] * cos_theta; // Y方向
+    local_force[0] = global_force[0] * cos_theta + global_force[1] * sin_theta;  // X deraction
+    local_force[1] = -global_force[0] * sin_theta + global_force[1] * cos_theta; // Y deraction
     local_force[2] = global_force[2];
     return local_force;
 }
@@ -182,7 +182,7 @@ explicit WallBoundary(const std::string &shape_name) : ComplexShape(shape_name)
      Real *phi_;
      Vecd *pos_;
  };
- //// 为不同类型创建别名
+
 using WettingFluidBodyInitialCondition = WettingBodyInitialCondition<FluidBody>;
 using WettingWallBodyInitialCondition = WettingBodyInitialCondition<SolidBody>;
  //----------------------------------------------------------------------
@@ -230,10 +230,10 @@ int main(int ac, char *av[])
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
 
     // 运行配置
-    //sph_system.setRunParticleRelaxation(false);
-    //sph_system.setReloadParticles(true);
-    sph_system.setRunParticleRelaxation(true);
-    sph_system.setReloadParticles(false);
+    sph_system.setRunParticleRelaxation(false);
+    sph_system.setReloadParticles(true);
+    //sph_system.setRunParticleRelaxation(true);
+    //sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
 
     //----------------------------------------------------------------------
@@ -353,11 +353,11 @@ int main(int ac, char *av[])
     // 法向计算
     SimpleDynamics<NormalDirectionFromBodyShape> wall_boundary_normal_direction(wall_boundary);
     SimpleDynamics<NormalDirectionFromBodyShape> object_normal_direction(floating_object);
-    InteractionWithUpdate<LinearGradientCorrectionMatrixComplex>
-        kernel_correction_complex(DynamicsArgs(water_block_inner, 0.5), water_block_contact);
-    Dynamics1Level<fluid_dynamics::Integration1stHalfCorrectionWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
+    //InteractionWithUpdate<LinearGradientCorrectionMatrixComplex>
+    //    kernel_correction_complex(DynamicsArgs(water_block_inner, 0.5), water_block_contact);
+    //Dynamics1Level<fluid_dynamics::Integration1stHalfCorrectionWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
     // 流体动力学
-    //Dynamics1Level<fluid_dynamics::Integration1stHalfWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
+    Dynamics1Level<fluid_dynamics::Integration1stHalfWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
 
     Dynamics1Level<fluid_dynamics::Integration2ndHalfWithWallRiemann> fluid_density_relaxation(water_block_inner, water_block_contact);
     InteractionWithUpdate<fluid_dynamics::DensitySummationComplexFreeSurface> fluid_density_by_summation(water_block_inner, water_block_contact);
@@ -411,12 +411,12 @@ int main(int ac, char *av[])
                                           fixed_spot_info, SimTK::Transform(SimTKVec3(0)));
 
     Vecd displacement0 = structure_system.initial_mass_center_ - tethering_point;
-    SimTK::MobilizedBody::Planar structure_mob(matter.Ground(),
+    //SimTK::MobilizedBody::Planar structure_mob(matter.Ground(),
+    //                                          SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], displacement0[2])),
+    //                                          tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
+   SimTK::MobilizedBody::Planar structure_mob(fixed_spot, // <--- 父级改为 fixed_spot
                                               SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], displacement0[2])),
                                               tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
-   //SimTK::MobilizedBody::Planar structure_mob(fixed_spot, // <--- 父级改为 fixed_spot
-   //                                           SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], displacement0[2])),
-   //                                           tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
 
     SimTK::Force::UniformGravity sim_gravity(forces, matter, SimTKVec3(0.0, -gravity_g, 0.0), 0.0); // 重力
     SimTK::Force::DiscreteForces force_on_bodies(forces, matter);                                   // 离散力
@@ -522,7 +522,7 @@ int main(int ac, char *av[])
             Real Dt = fluid_advection_time_step.exec();
             fluid_density_by_summation.exec();
             viscous_force.exec();
-            kernel_correction_complex.exec(); // with KGC correction
+            //kernel_correction_complex.exec(); // with KGC correction
             transport_velocity_correction.exec();
             interval_computing_time_step += TickCount::now() - time_instance;
 

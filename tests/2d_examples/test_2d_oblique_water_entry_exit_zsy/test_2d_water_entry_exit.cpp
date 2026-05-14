@@ -19,7 +19,7 @@ Vec2d centroid(0.0, 0.0);       /**< 圆柱质心位置（相对于圆柱中心�
 Real DL = 4;                                              /**< Water tank length. */
 Real DH = 5;                                              /**< Water tank height. */
 Real LH = 2;                                              /**< Water column height. */
-Real particle_spacing_ref = 0.005;                        /**< Initial reference particle spacing. */
+Real particle_spacing_ref = 0.0025;                        /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4;                       /**< Thickness of tank wall. */
 Vec2d cylinder_center(0.45 * DL, LH + 0.2);               /**< Location of the cylinder center. */
 
@@ -502,7 +502,9 @@ int main(int ac, char *av[])
      * Set the mass center as the origin location of the planar mobilizer
      */
     Vecd displacement0 = cylinder_constraint_area.initial_mass_center_ - tethering_point;
-
+    //SimTK::MobilizedBody::Planar tethered_spot(matter.Ground(), // connect to ground, not the fixed spot 
+    //                                           SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], 0.0)),
+    //                                           tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
     SimTK::MobilizedBody::Planar tethered_spot(fixed_spot,
                                                SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], 0.0)),
                                                tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
@@ -519,8 +521,8 @@ int main(int ac, char *av[])
     //state.updQ()[2] = initial_rotation_angle; // 相对于父体的旋转
     state.updQ()[2] = 0.0;
 
-    SimTK::Vec3 mobilizer_vel(0.0, initial_speed * cos(initial_angle), initial_speed * sin(initial_angle)); // 初始速度（U）：通过Mobilizer的setU方法设置初始速度
-    tethered_spot.setU(state, mobilizer_vel);                                                               // 设置初始速度（U）
+    SimTK::Vec3 mobilizer_vel(0.0, initial_speed * cos(initial_angle), initial_speed * sin(initial_angle)); 
+    tethered_spot.setU(state, mobilizer_vel);                                                               
     // 设置完Q/U后，需要让Simbody重新感知状态
     MBsystem.realize(state, SimTK::Stage::Velocity);
     MBsystem.realize(state, SimTK::Stage::Acceleration);
@@ -574,7 +576,7 @@ int main(int ac, char *av[])
     int observation_sample_interval = screen_output_interval * 1;
     int restart_output_interval = screen_output_interval * 500;
     Real end_time = 0.01;
-    Real output_interval_vtp = end_time / 20.0;
+    Real output_interval_vtp = end_time / 10.0;
     Real output_interval_force = end_time / 500.0;
     Real next_force_output = output_interval_force;
     Real next_vtp_output = output_interval_vtp;
