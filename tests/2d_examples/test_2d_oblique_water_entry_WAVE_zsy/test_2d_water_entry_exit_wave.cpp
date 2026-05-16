@@ -46,6 +46,7 @@ Real cavity_length = 0.5; // 左侧空腔长度，应大于最大推板位移
 
 int pre_output_count = 50;  // 释放前 VTP 输出次数（不含 t=0）
 int post_output_count = 20; // 释放后 VTP 输出次数
+int post_froce_output_count = 500; // 释放后力输出次数
 
 // 圆柱初始位置（根据波浪动态调整）
 Vec2d cylinder_center; /**< 实际将在 main 中计算 */
@@ -730,18 +731,15 @@ int main(int ac, char *av[])
     int screen_output_interval = 1; 
     int observation_sample_interval = screen_output_interval * 1;
     int restart_output_interval = screen_output_interval * 2000;
-    Real end_time = release_time+0.03;
-    //Real output_interval = end_time / 20.0;
+    Real end_time = release_time+0.02;
 
 // 计算释放前和释放后的输出间隔
     Real pre_interval = release_time / pre_output_count;
-    Real post_interval = (end_time - release_time) / post_output_count;
-    // VTP 文件编号计数器（0 已用于初始输出）
-    int vtp_file_counter = 1;
-    Real output_interval_vtp = post_interval;
-    Real output_interval_force = end_time / 500.0;
-    Real next_force_output = output_interval_force;
-    Real next_vtp_output = post_interval;
+
+    Real output_interval_vtp = (end_time - release_time) / post_output_count;
+    Real output_interval_force = (end_time - release_time) / post_froce_output_count;
+    //Real next_force_output = output_interval_force;
+    //Real next_vtp_output = output_interval_vtp;
     //----------------------------------------------------------------------
     //	Statistics for CPU time
     //----------------------------------------------------------------------
@@ -762,9 +760,7 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     //	Main loop starts here.
     //----------------------------------------------------------------------
-    while (physical_time < end_time)
-    {
-        Real integration_time = 0.0;
+
         /** Integrate time (loop) until the next output time. */
         //----------------------------------------------------------------------
         //	Main loop starts here.
@@ -775,7 +771,7 @@ int main(int ac, char *av[])
             Real integration_time = 0.0;
             while (integration_time < pre_interval && physical_time < release_time )
             {
-                // 内层时间步进（与原来相同）
+             
                 time_instance = TickCount::now();
                 Real Dt = fluid_advection_time_step.exec();
 
@@ -803,7 +799,6 @@ int main(int ac, char *av[])
 
                     integ.stepBy(dt);
 
-                    // 释放前强制静止
                     if (physical_time < release_time)
                     {
                         SimTK::State &state = integ.updAdvancedState();
@@ -853,13 +848,17 @@ int main(int ac, char *av[])
                 water_block_complex.updateConfiguration();
                 front_center_observer_contact.updateConfiguration();
                 free_stream_surface_indicator.exec();
-                interval_updating_configuration += TickCount::now() - time_instance;
                 damping_wave.exec(Dt);
+                interval_updating_configuration += TickCount::now() - time_instance;
+
             }
             // 每个外层步结束后输出一次 VTP（释放前）
             body_states_recording.writeToFile();
         }
         // ========== 第二阶段：释放后（同时输出 VTP 和数据文件） ==========
+
+        Real next_force_output = physical_time + output_interval_force;
+        Real next_vtp_output = physical_time + output_interval_vtp;
         while (physical_time < end_time)
         {
             Real next_output_time = std::min(next_force_output, next_vtp_output);
@@ -896,30 +895,17 @@ int main(int ac, char *av[])
                     water_block_contact.updateConfiguration();
 
                     integ.stepBy(dt);
-
-                    // 释放逻辑（原样保留，released 标志在此阶段首次触发）
-                    if (physical_time < release_time) // 不会进入
+                    SimTK::State &state_for_update = integ.updAdvancedState();
+                    // 释放瞬间设置速度（仅一次）
+                    if (!released && physical_time >= release_time)
                     {
-                        SimTK::State &state = integ.updAdvancedState();
-                        state.updQ()[0] = displacement0[0];
-                        state.updQ()[1] = displacement0[1];
-                        state.updQ()[2] = 0.0;
-                        state.updU()[0] = 0.0;
-                        state.updU()[1] = 0.0;
-                        state.updU()[2] = 0.0;
-                        MBsystem.realize(state, SimTK::Stage::Velocity);
-                    }
-                    else if (!released)
-                    {
-                        SimTK::State &state = integ.updAdvancedState();
-                        state.updU()[0] = initial_angular_velocity;
-                        state.updU()[1] = initial_speed * cos(initial_angle);
-                        state.updU()[2] = initial_speed * sin(initial_angle);
-                        MBsystem.realize(state, SimTK::Stage::Velocity);
+                        state_for_update.updU()[0] = initial_angular_velocity;
+                        state_for_update.updU()[1] = initial_speed * cos(initial_angle);
+                        state_for_update.updU()[2] = initial_speed * sin(initial_angle);
+                        MBsystem.realize(state_for_update, SimTK::Stage::Velocity);
                         released = true;
                     }
 
-                    SimTK::State &state_for_update = integ.updAdvancedState();
                     force_on_bodies.clearAllBodyForces(state_for_update);
                     if (physical_time >= release_time)
                     {
@@ -935,7 +921,7 @@ int main(int ac, char *av[])
                 }
                 interval_computing_fluid_pressure_relaxation += TickCount::now() - time_instance;
 
-                // 5.11
+
                 if (number_of_iterations % screen_output_interval == 0)
                 {
                     std::cout << std::fixed << std::setprecision(9) << "N=" << number_of_iterations << "	Time = "
@@ -1011,7 +997,7 @@ int main(int ac, char *av[])
                 next_vtp_output += output_interval_vtp;
             }
         }
-   }
+   
         TickCount t6 = TickCount::now();
        
     TimeInterval tt;
