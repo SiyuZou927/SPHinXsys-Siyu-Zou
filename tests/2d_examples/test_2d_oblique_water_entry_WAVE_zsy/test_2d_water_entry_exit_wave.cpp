@@ -10,6 +10,7 @@
  */
 // #include "2d_flow_around_cylinder.h"
 #include "sphinxsys.h" //SPHinXsys Library.
+#include "wave_generation.h"
 using namespace SPH;   // Namespace cite here.
 
 //----------------------------------------------------------------------
@@ -33,14 +34,8 @@ Real LH = 2;                     /**< Water column height. */
 Real particle_spacing_ref = 0.02; /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4;                    /**< Thickness of tank wall. */
 
-// 波浪控制参数
-Real wave_height = 0.2;                  /**< 目标波高 (m) */
-Real wave_period = 1.0;                   /**< 波浪周期 (s) */
-Real wave_phase = 0.0;                    /**< 初始相位 (rad)，用于控制圆柱入水位置 */
-Real wave_k = 0.0;                        /**< 波数（将自动计算） */
-Real wave_stroke = 0.0;                   /**< 推板冲程（将自动计算） */
-Real wave_omega = 2.0 * Pi / wave_period; /**< 角频率 */
-Real release_time = 5.0;                  // 造波时长 间接控制结束时刻，建议设置为波浪周期的整数倍以获得完整波形
+//波浪控制参数
+Real release_time = 5.0;                  // 造波时长 
 bool released = false; // 是否已释放
 Real cavity_length = 0.5; // 左侧空腔长度，应大于最大推板位移
 
@@ -73,7 +68,6 @@ Real diffusion_coeff = 100.0 * pow(particle_spacing_ref, 2); /**< Wetting coeffi
 Real fluid_moisture = 1.0;                                   /**< fluid moisture. */
 Real cylinder_moisture = 0.0;                                /**< cylinder moisture. */
 Real wall_moisture = 1.0;                                    /**< wall moisture. */
-
 
 //----------------------------------------------------------------------
 // Create the object shape
@@ -133,10 +127,10 @@ Real getCylinderRotationAngle(SimTK::MobilizedBody::Planar &tethered_spot, const
 }
 
 //----------------------------------------------------------------------
-// 波浪相关辅助函数（新增）
+// 波浪相关辅助函数
 //----------------------------------------------------------------------
 // 求解线性波色散方程：omega^2 = g * k * tanh(k * h)
-Real solveDispersionEquation(Real omega, Real h, Real g, Real tol = 1e-6)
+Real solveDispersionEquation(Real omega, Real h, Real g, Real tol)
 {
     Real k0 = omega * omega / g; // 深水近似初值
     Real k = k0;
@@ -164,40 +158,31 @@ Real computePistonStroke(Real H, Real k, Real h)
     return H / transfer;
 }
 //----------------------------------------------------------------------
-// 造波板动力学类（新增）
+// 造波板动力学类
 //----------------------------------------------------------------------
 class WaveMaking : public BodyPartMotionConstraint
 {
-    Real amplitude_;      // 冲程的一半（0.5 * stroke）
-    Real omega_;          // 角频率
-    Real phase_;          // 初始相位（可设为零）
-    Real *physical_time_; // 指向物理时间的指针
-                          // Vecd *acc_;  // 若需要记录加速度可取消注释，并确保粒子注册了"Acceleration"
+    WaveFormFunc wave_func_;
+    Real *physical_time_;
 
   public:
-    WaveMaking(BodyPartByParticle &body_part)
+    WaveMaking(BodyPartByParticle &body_part, WaveFormFunc func)
         : BodyPartMotionConstraint(body_part),
-          amplitude_(0.5 * wave_stroke),
-          omega_(wave_omega),
-          phase_(0.0),
-          physical_time_(body_part.getSPHBody().getSPHSystem().getSystemVariableDataByName<Real>("PhysicalTime"))
-    {
-        // 如果需要加速度变量，取消下面注释，并确保粒子注册了"Acceleration"
-        // acc_ = particles_->template getVariableDataByName<Vecd>("Acceleration");
-    }
+          wave_func_(func),
+          physical_time_(body_part.getSPHBody().getSPHSystem().getSystemVariableDataByName<Real>("PhysicalTime")) {}
 
-    virtual void update(size_t index_i, Real dt = 0.0)
+    void update(size_t index_i, Real dt = 0.0)
     {
         Real time = *physical_time_;
-        Real displacement = amplitude_ * sin(omega_ * time + phase_);
-        pos_[index_i] = pos0_[index_i] + Vecd(displacement, 0.0);
-        vel_[index_i] = Vecd(amplitude_ * omega_ * cos(omega_ * time + phase_), 0.0);
-        // 如果不需要加速度，可以注释掉下面一行
-        // acc_[index_i] = Vecd(-amplitude_ * omega_ * omega_ * sin(omega_ * time + phase_), 0.0);
+        Real disp = 0.0, vel = 0.0;
+        wave_func_(time, disp, vel);
+        pos_[index_i] = pos0_[index_i] + Vecd(disp, 0.0);
+        vel_[index_i] = Vecd(vel, 0.0);
     }
 };
+
 //----------------------------------------------------------------------
-// 消波区域形状（新增）
+// 消波区域形状
 //----------------------------------------------------------------------
 MultiPolygon createDampingBufferShape()
 {
@@ -213,10 +198,8 @@ MultiPolygon createDampingBufferShape()
     return multi_polygon;
 }
 //----------------------------------------------------------------------
-// 观测点位置（原有）
+// observer_location
 //----------------------------------------------------------------------
-
-// 新增：前段中心观测点初始位置（注意 cylinder_center 尚未计算，将在 main 中重新赋值）
 StdVec<Vecd> front_center_observer_location = {Vecd(0, 0)}; // 占位，稍后更新
 //----------------------------------------------------------------------
 // Output summary file.
@@ -454,21 +437,72 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     //  1. 波浪参数预计算（新增）
     //----------------------------------------------------------------------
-    wave_omega = 2.0 * Pi / wave_period;
-    wave_k = solveDispersionEquation(wave_omega, LH, gravity_g);
-    wave_stroke = computePistonStroke(wave_height, wave_k, LH);
-    std::cout << "Wave number k = " << wave_k << ", stroke = " << wave_stroke << std::endl;
+    //wave_omega = 2.0 * Pi / wave_period;
+    //wave_k = solveDispersionEquation(wave_omega, LH, gravity_g);
+    //wave_stroke = computePistonStroke(wave_height, wave_k, LH);
+    //std::cout << "Wave number k = " << wave_k << ", stroke = " << wave_stroke << std::endl;
 
-    // 根据波浪相位确定圆柱初始位置
-    Real cylinder_x = 0.5 * DL;                                        
-    Real eta0 = 0.5 * wave_height * cos(wave_k * cylinder_x + wave_phase); // t=0时的波面高度
-    Real cylinder_y = eta0 + LH + 0.2; // 设置圆柱中心 y 坐标
+    //// 根据波浪相位确定圆柱初始位置
+    //Real cylinder_x = 0.5 * DL;                                        
+    //Real eta0 = 0.5 * wave_height * cos(wave_k * cylinder_x + wave_phase); // t=0时的波面高度
+    //Real cylinder_y = eta0 + LH + 0.2; // 设置圆柱中心 y 坐标
+    //cylinder_center = Vecd(cylinder_x, cylinder_y);
+  
+    //----------------------------------------------------------------------
+    // 规则波参数
+    //----------------------------------------------------------------------
+    //Real H = 0.2;     // 波高 (m)
+    //Real T = 1.0;     // 周期 (s)
+    //Real phase = 0.0; // 相位 (rad)
+    //WaveFormFunc wave_func = createRegularWave(H, T, phase, LH, gravity_g);
+    //// 计算初始波面高度和圆柱位置
+    //Real cylinder_x = 0.2 * DL;
+    //Real omega = 2.0 * Pi / T;
+    //Real k = solveDispersionEquation(omega, LH, gravity_g);
+    //Real eta0 = 0.5 * H * cos(k * cylinder_x + phase); // 规则波波面
+    //Real cylinder_y = eta0 + LH + 0.2;
+    //cylinder_center = Vecd(cylinder_x, cylinder_y);
+
+    //----------------------------------------------------------------------
+    // 双色波参数
+    //----------------------------------------------------------------------
+    //Real H1 = 0.12, T1 = 1.2;
+    //Real H2 = 0.08, T2 = 0.8;
+    //Real delta_phi = Pi / 3.0; // 相位差
+    //WaveFormFunc wave_func = createBiChromaticWave(H1, T1, H2, T2, delta_phi, LH, gravity_g);
+
+    //// 计算初始波面高度
+    //Real cylinder_x = 0.2 * DL;
+    //Real omega1 = 2.0 * Pi / T1, omega2 = 2.0 * Pi / T2;
+    //Real k1 = solveDispersionEquation(omega1, LH, gravity_g);
+    //Real k2 = solveDispersionEquation(omega2, LH, gravity_g);
+    //Real eta0 = 0.5 * H1 * cos(k1 * cylinder_x) + 0.5 * H2 * cos(k2 * cylinder_x + delta_phi);
+    //Real cylinder_y = eta0 + LH + 0.3;
+    //cylinder_center = Vecd(cylinder_x, cylinder_y);
+
+    //----------------------------------------------------------------------
+    // 聚焦波参数
+    //----------------------------------------------------------------------
+    Real Af = 0.05;       // 谱峰处目标波浪振幅 (m)
+    Real fp = 0.8;        // 谱峰频率 (Hz)
+    Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz
+    int Nf = 31;          // 离散频率数量（奇数可得到对称谱）
+    Real tf = 5.0;        // 聚焦时刻 (s)
+    Real xf = DL / 2.0;   // 聚焦位置 (m) - 水槽中央
+
+    WaveFormFunc wave_func = createFocusedWave(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g);
+
+    // 计算初始波面高度（t=0，x=cylinder_x 处）
+    Real cylinder_x = 0.2 * DL;
+    //Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
+    //                                         cylinder_x, 0.0);
+    Real cylinder_y = Af*10 + LH + 0.2;
     cylinder_center = Vecd(cylinder_x, cylinder_y);
+
+
+
     std::cout << "Cylinder initial position: (" << cylinder_center[0] << ", " << cylinder_center[1] << ")" << std::endl;
-
-    // 更新依赖 cylinder_center 的观测点位置
-
-    front_center_observer_location = {resetFrontCenterObserverPosition()};
+    front_center_observer_location = {resetFrontCenterObserverPosition()}; // 更新依赖 cylinder_center 的观测点位置
     //----------------------------------------------------------------------
     //	Build up an SPHSystem.
     //----------------------------------------------------------------------
@@ -607,9 +641,7 @@ int main(int ac, char *av[])
 
     ReduceDynamics<QuantitySummation<Vecd>> calculate_cylinder_total_pressure_force(cylinder, "PressureForceFromFluid");
     ReduceDynamics<QuantitySummation<Vecd>> calculate_cylinder_total_viscous_force(cylinder, "ViscousForceFromFluid");
-    // 插值更新前段中心观测点位置
-    //InteractionDynamics<InterpolatingAQuantity<Vecd>>
-    //    interpolation_front_center_position(front_center_observer_contact, "Position", "Position");
+
     //----------------------------------------------------------------------
     //	Define the configuration related particles dynamics.
     //----------------------------------------------------------------------
@@ -627,7 +659,7 @@ int main(int ac, char *av[])
     MultiPolygon wavemaker_poly;
     wavemaker_poly.addAPolygon(wavemaker_shape_pnts, ShapeBooleanOps::add);
     BodyRegionByParticle wave_maker(wall_boundary, makeShared<MultiPolygonShape>(wavemaker_poly, "WaveMaker"));
-    SimpleDynamics<WaveMaking> wave_making(wave_maker);
+    SimpleDynamics<WaveMaking> wave_making(wave_maker, wave_func);
 
     // 定义消波区域（流体右侧）
     BodyRegionByCell damping_buffer(water_block, makeShared<MultiPolygonShape>(createDampingBufferShape(), "DampingBuffer"));
@@ -657,12 +689,12 @@ int main(int ac, char *av[])
     /** Mobility of the tethered spot. */
     Vecd displacement0 = cylinder_constraint_area.initial_mass_center_ - tethering_point;
 
-    SimTK::MobilizedBody::Planar tethered_spot(fixed_spot,
-                                               SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], 0.0)),
-                                               tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
-    // SimTK::MobilizedBody::Planar tethered_spot(matter.Ground(), // connect to ground, not the fixed spot
+    //SimTK::MobilizedBody::Planar tethered_spot(fixed_spot,
     //                                           SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], 0.0)),
     //                                           tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
+     SimTK::MobilizedBody::Planar tethered_spot(matter.Ground(), // connect to ground, not the fixed spot
+                                               SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], 0.0)),
+                                               tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
     // discrete forces acting on the bodies.
     SimTK::Force::UniformGravity sim_gravity(forces, matter, SimTK::Vec3(0.0, Real(-9.81), 0.0), 0.0);
     SimTK::Force::DiscreteForces force_on_bodies(forces, matter);
@@ -672,7 +704,6 @@ int main(int ac, char *av[])
 
     state.updQ()[0] = displacement0[0];       // x位移（从系留点到质心）
     state.updQ()[1] = displacement0[1];       // y位移（从系留点到质心）
-    //state.updQ()[2] = initial_rotation_angle; // 相对于父体的旋转
     state.updQ()[2] = 0.0;
 
     SimTK::Vec3 mobilizer_vel(0.0, initial_speed * cos(initial_angle), initial_speed * sin(initial_angle)); 
@@ -731,15 +762,13 @@ int main(int ac, char *av[])
     int screen_output_interval = 1; 
     int observation_sample_interval = screen_output_interval * 1;
     int restart_output_interval = screen_output_interval * 2000;
-    Real end_time = release_time+0.02;
+    Real end_time = release_time+0.05;
 
 // 计算释放前和释放后的输出间隔
     Real pre_interval = release_time / pre_output_count;
-
     Real output_interval_vtp = (end_time - release_time) / post_output_count;
     Real output_interval_force = (end_time - release_time) / post_froce_output_count;
-    //Real next_force_output = output_interval_force;
-    //Real next_vtp_output = output_interval_vtp;
+
     //----------------------------------------------------------------------
     //	Statistics for CPU time
     //----------------------------------------------------------------------
@@ -753,18 +782,12 @@ int main(int ac, char *av[])
     //	First output before the main loop.
     //----------------------------------------------------------------------
     body_states_recording.writeToFile(0);
-    //write_cylinder_displacement.writeToFile(number_of_iterations);
-    //write_cylinder_wetting.writeToFile(number_of_iterations);
-    //write_front_center_position.writeToFile(number_of_iterations);
     SummaryOutput summary_output("./output/SummaryOutput.dat"); // 创建自定义的汇总输出对象
     //----------------------------------------------------------------------
     //	Main loop starts here.
     //----------------------------------------------------------------------
 
         /** Integrate time (loop) until the next output time. */
-        //----------------------------------------------------------------------
-        //	Main loop starts here.
-        //----------------------------------------------------------------------
         // ========== 第一阶段：释放前（仅输出 VTP） ==========
         while (physical_time < release_time) // 微小量避免浮点误差
         {
