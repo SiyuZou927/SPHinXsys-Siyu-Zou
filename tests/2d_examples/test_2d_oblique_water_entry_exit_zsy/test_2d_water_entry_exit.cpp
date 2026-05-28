@@ -518,7 +518,6 @@ int main(int ac, char *av[])
 
     state.updQ()[0] = displacement0[0];       // x位移（从系留点到质心）
     state.updQ()[1] = displacement0[1];       // y位移（从系留点到质心）
-    //state.updQ()[2] = initial_rotation_angle; // 相对于父体的旋转
     state.updQ()[2] = 0.0;
 
     SimTK::Vec3 mobilizer_vel(0.0, initial_speed * cos(initial_angle), initial_speed * sin(initial_angle)); 

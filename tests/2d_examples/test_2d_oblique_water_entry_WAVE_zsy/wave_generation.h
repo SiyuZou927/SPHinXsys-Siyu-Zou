@@ -82,54 +82,99 @@ inline WaveFormFunc createBiChromaticWaveFromSteepness(Real f1, Real delta_f, Re
 //   g         - 重力加速度 (m/s²)，默认 9.81
 //
 // 返回: WaveFormFunc，可直接用于 WaveMaking 类
+//inline WaveFormFunc createFocusedWave(Real Af, Real fp, Real bandwidth, int Nf,
+//                                      Real tf, Real xf, Real h, Real g = 9.81)
+//{
+//    if (Nf < 2) Nf = 2;
+//    Real omega_peak = 2.0 * Pi * fp;
+//    Real domega = 2.0 * Pi * (bandwidth / (Nf - 1));
+//    Real omega_min = omega_peak - 0.5 * (2.0 * Pi * bandwidth);  // 转换为角频率带宽
+//    Real omega_max = omega_peak + 0.5 * (2.0 * Pi * bandwidth);
+//    // 高斯谱标准差（使得谱在带宽内包含主要能量，通常 sigma_omega = 带宽/6 可使±3σ覆盖整个带宽）
+//    Real sigma_omega = 2.0 * Pi * (bandwidth / 6.0);
+//    // 存储各成分的目标波浪振幅（在聚焦位置处的振幅）、角频率、相位（推板处）
+//    std::vector<Real> target_amps(Nf), omegas(Nf), k(Nf), push_amps(Nf), phases(Nf);
+//
+//    // 先计算所有频率的高斯包络值，用于归一化（保证谱峰处精确等于Af，如果不归一化也可，但峰值不精确）
+//    for (int i = 0; i < Nf; ++i) {
+//        omegas[i] = omega_min + i * domega;
+//        Real env = std::exp(-0.5 * std::pow((omegas[i] - omega_peak) / sigma_omega, 2)); // 高斯包络值
+//        target_amps[i] = env;  
+//    }
+//    // 归一化：使谱峰处振幅为Af（实际是将峰值除以最高包络值后乘以Af）
+//    Real max_env = *std::max_element(target_amps.begin(), target_amps.end());
+//    for (int i = 0; i < Nf; ++i) {
+//        target_amps[i] = Af * (target_amps[i] / max_env);
+//        // 色散关系：解出波数 k
+//        k[i] = solveDispersionEquation(omegas[i], h, g);
+//        // 计算推板振幅（通过传递函数）
+//        Real stroke = computePistonStroke(2.0 * target_amps[i], k[i], h);
+//        push_amps[i] = 0.5 * stroke;
+//        // 关键修正：相位包含传播延迟
+//        phases[i] = -omegas[i] * tf + k[i] * xf;
+//    }
+//
+//    // 返回波形函数（推板位移与速度）
+//    return [push_amps, omegas, phases](Real t, Real &disp, Real &vel) {
+//        disp = 0.0;
+//        vel  = 0.0;
+//        for (size_t i = 0; i < push_amps.size(); ++i) {
+//            disp += push_amps[i] * cos(omegas[i] * t + phases[i]);
+//            vel  += push_amps[i] * omegas[i] * sin(omegas[i] * t + phases[i]);
+//        }
+//    };
+//}
 inline WaveFormFunc createFocusedWave(Real Af, Real fp, Real bandwidth, int Nf,
                                       Real tf, Real xf, Real h, Real g = 9.81)
 {
-    if (Nf < 2) Nf = 2;
+    std::cout << "Inside createFocusedWave: tf = " << tf << ", xf = " << xf << std::endl;
+    if (Nf < 2)
+        Nf = 2;
     Real omega_peak = 2.0 * Pi * fp;
     Real domega = 2.0 * Pi * (bandwidth / (Nf - 1));
-    Real omega_min = omega_peak - 0.5 * (2.0 * Pi * bandwidth);  // 转换为角频率带宽
-    Real omega_max = omega_peak + 0.5 * (2.0 * Pi * bandwidth);
-
-    // 存储各成分的目标波浪振幅（在聚焦位置处的振幅）、角频率、相位（推板处）
-    std::vector<Real> target_amps(Nf), omegas(Nf), phases(Nf);
-
-    // 高斯谱标准差（使得谱在带宽内包含主要能量，通常 sigma_omega = 带宽/6 可使±3σ覆盖整个带宽）
+    Real omega_min = omega_peak - 0.5 * (2.0 * Pi * bandwidth);
     Real sigma_omega = 2.0 * Pi * (bandwidth / 6.0);
-    Real sum_env = 0.0;
-    // 先计算所有频率的高斯包络值，用于归一化（保证谱峰处精确等于Af，如果不归一化也可，但峰值不精确）
-    for (int i = 0; i < Nf; ++i) {
+
+    std::vector<Real> target_amps(Nf), omegas(Nf), k(Nf), push_amps(Nf), phases(Nf);
+    for (int i = 0; i < Nf; ++i)
+    {
         omegas[i] = omega_min + i * domega;
         Real env = std::exp(-0.5 * std::pow((omegas[i] - omega_peak) / sigma_omega, 2));
-        target_amps[i] = env;   // 暂时存包络值
-        sum_env += env;
+        target_amps[i] = env;
     }
-    // 归一化：使谱峰处振幅为Af（实际是将峰值除以最高包络值后乘以Af）
     Real max_env = *std::max_element(target_amps.begin(), target_amps.end());
-    for (int i = 0; i < Nf; ++i) {
+    for (int i = 0; i < Nf; ++i)
+    {
         target_amps[i] = Af * (target_amps[i] / max_env);
-    }
-
-    // 计算每个频率的推板振幅（通过传递函数转换）
-    std::vector<Real> push_amps(Nf);
-    for (int i = 0; i < Nf; ++i) {
-        Real omega = omegas[i];
-        Real k = solveDispersionEquation(omega, h, g);
-        // 目标波高 H = 2 * target_amps[i]
-        Real stroke = computePistonStroke(2.0 * target_amps[i], k, h);
+        k[i] = solveDispersionEquation(omegas[i], h, g);
+        Real stroke = computePistonStroke(2.0 * target_amps[i], k[i], h);
         push_amps[i] = 0.5 * stroke;
-        // 推板处的相位：使所有分量在 (xf, tf) 处同相
-        phases[i] = -omega * tf + k * xf;
+        phases[i] = Pi / 2.0 - omegas[i] * tf + k[i] * xf;
     }
 
-    // 返回波形函数（推板位移与速度）
-    return [push_amps, omegas, phases](Real t, Real &disp, Real &vel) {
+
+    if (Nf > 0)
+    {
+        Real c0 = omegas[0] / k[0];
+        Real travel_time = xf / c0;
+        std::cout << "Focus wave: central speed = " << c0 << " m/s, travel time to xf = " << travel_time << " s" << std::endl;
+        Real t_peak = (Pi / 2.0 - phases[0]) / omegas[0];
+        Real t_expected = tf - xf / (omegas[0] / k[0]);
+        std::cout << "First component: omega=" << omegas[0] << ", k=" << k[0]
+                  << ", phase=" << phases[0] << ", t_peak=" << t_peak
+                  << ", expected t_peak=" << t_expected << std::endl;
+    }
+
+    return [push_amps, omegas, phases](Real t, Real &disp, Real &vel)
+    {
         disp = 0.0;
-        vel  = 0.0;
-        for (size_t i = 0; i < push_amps.size(); ++i) {
-            disp += push_amps[i] * sin(omegas[i] * t + phases[i]);
-            vel  += push_amps[i] * omegas[i] * cos(omegas[i] * t + phases[i]);
+        vel = 0.0;
+        for (size_t i = 0; i < push_amps.size(); ++i)
+        {
+            disp += push_amps[i] * cos(omegas[i] * t + phases[i]);
+            vel += push_amps[i] * omegas[i] * sin(omegas[i] * t + phases[i]);
         }
+
     };
 }
 
@@ -140,30 +185,36 @@ inline Real evaluateFocusedWaveElevation(Real Af, Real fp, Real bandwidth, int N
                                          Real tf, Real xf, Real h, Real g,
                                          Real x, Real t)
 {
-    if (Nf < 2) Nf = 2;
+    if (Nf < 2)
+        Nf = 2;
     Real omega_peak = 2.0 * Pi * fp;
     Real domega = 2.0 * Pi * (bandwidth / (Nf - 1));
     Real omega_min = omega_peak - 0.5 * (2.0 * Pi * bandwidth);
     Real sigma_omega = 2.0 * Pi * (bandwidth / 6.0);
 
-    std::vector<Real> target_amps(Nf), omegas(Nf);
-    for (int i = 0; i < Nf; ++i) {
+    std::vector<Real> target_amps(Nf), omegas(Nf), k(Nf), phases(Nf);
+    for (int i = 0; i < Nf; ++i)
+    {
         omegas[i] = omega_min + i * domega;
         Real env = std::exp(-0.5 * std::pow((omegas[i] - omega_peak) / sigma_omega, 2));
         target_amps[i] = env;
     }
     Real max_env = *std::max_element(target_amps.begin(), target_amps.end());
-    for (int i = 0; i < Nf; ++i) {
+    for (int i = 0; i < Nf; ++i)
+    {
         target_amps[i] = Af * (target_amps[i] / max_env);
+        k[i] = solveDispersionEquation(omegas[i], h, g);
+        // 与造波板相位保持一致
+        phases[i] = -omegas[i] * tf +  k[i] * xf;
     }
 
     Real eta = 0.0;
-    for (int i = 0; i < Nf; ++i) {
-        Real omega = omegas[i];
-        Real k = solveDispersionEquation(omega, h, g);
-        Real phase = -omega * tf + k * xf;   // 推板处初始相位
-        // 波面表达式：η = a * cos(k*x - ω*t + phase)
-        eta += target_amps[i] * cos(k * x - omega * t + phase);
+    for (int i = 0; i < Nf; ++i)
+    {
+        //// 波面表达式：η = a * cos(ωt - kx + φ)
+        //eta += target_amps[i] * cos(omegas[i] * t - k[i] * x + phases[i]);
+        //  波面 η = a * sin(ωt - kx + φ)
+        eta += target_amps[i] * cos(omegas[i] * t - k[i] * x + phases[i]);
     }
     return eta;
 }

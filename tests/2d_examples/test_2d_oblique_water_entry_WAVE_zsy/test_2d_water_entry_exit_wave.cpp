@@ -28,20 +28,21 @@ Vec2d centroid(0.0, 0.0);       /**< 圆柱质心位置（相对于圆柱中心�
 //----------------------------------------------------------------------
 //	Basic geometry parameters and numerical setup.
 //----------------------------------------------------------------------
-Real DL = 4;                     /**< Water tank length. */
-Real DH = 5;                     /**< Water tank height. */
-Real LH = 2;                     /**< Water column height. */
-Real particle_spacing_ref = 0.02; /**< Initial reference particle spacing. */
-Real BW = particle_spacing_ref * 4;                    /**< Thickness of tank wall. */
+Real DL = 4;                         /**< Water tank length. */
+Real DH = 5;                        /**< Water tank height. */
+Real LH = 2;                         /**< Water column height. */
+Real cavity_length = 1;             // leftover length for wave development
+Real particle_spacing_ref = 0.02;    /**< Initial reference particle spacing. */
+Real BW = particle_spacing_ref * 4;    /**< Thickness of tank wall. */
 
 //波浪控制参数
-Real release_time = 5.0;                  // 造波时长 
+Real release_time = 5; // 造波时长
 bool released = false; // 是否已释放
-Real cavity_length = 0.5; // 左侧空腔长度，应大于最大推板位移
 
-int pre_output_count = 50;  // 释放前 VTP 输出次数（不含 t=0）
-int post_output_count = 20; // 释放后 VTP 输出次数
-int post_froce_output_count = 500; // 释放后力输出次数
+// output control parameters
+int pre_output_count = release_time*10;// vtp output count before release
+int post_output_count = 20;        // vtp output count after release
+int post_froce_output_count = 500;  // force output count after release
 
 // 圆柱初始位置（根据波浪动态调整）
 Vec2d cylinder_center; /**< 实际将在 main 中计算 */
@@ -67,7 +68,7 @@ std::string diffusion_species_name = "Phi";                     //  ϕ∗
 Real diffusion_coeff = 100.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. γ∗ */
 Real fluid_moisture = 1.0;                                   /**< fluid moisture. */
 Real cylinder_moisture = 0.0;                                /**< cylinder moisture. */
-Real wall_moisture = 1.0;                                    /**< wall moisture. */
+Real wall_moisture = 0.0;                                    /**< wall moisture. */
 
 //----------------------------------------------------------------------
 // Create the object shape
@@ -122,8 +123,8 @@ Real getCylinderRotationAngle(SimTK::MobilizedBody::Planar &tethered_spot, const
 {
     SimTK::Rotation rot = tethered_spot.getBodyRotation(state);
     SimTK::Vec3 angles = rot.convertRotationToBodyFixedXYZ();
-    Real angle_from_rot = angles[2]; // 绕Z轴的旋转
-    return angle_from_rot; // 使用旋转矩阵的角度
+    Real angle_from_rot = angles[2]; // z-axis rotation
+    return angle_from_rot;          
 }
 
 //----------------------------------------------------------------------
@@ -157,6 +158,27 @@ Real computePistonStroke(Real H, Real k, Real h)
     Real transfer = 2.0 * sinh_kh * sinh_kh / (sinh_kh * cosh_kh + kh);
     return H / transfer;
 }
+
+// 定义一个辅助函数，生成一个竖直条状的探头形状（宽度 2*h，从底部到水面以上）
+MultiPolygon createWaveProbeShape(Real x_center, Real h, Real water_depth, Real tank_height)
+{
+    std::vector<Vecd> pnts;
+    pnts.push_back(Vecd(x_center - h, 0.0));
+    pnts.push_back(Vecd(x_center - h, tank_height));
+    pnts.push_back(Vecd(x_center + h, tank_height));
+    pnts.push_back(Vecd(x_center + h, 0.0));
+    pnts.push_back(Vecd(x_center - h, 0.0));
+    MultiPolygon multi_polygon;
+    multi_polygon.addAPolygon(pnts, ShapeBooleanOps::add);
+    return multi_polygon;
+}
+
+// 具体探头位置（单位：米）
+Real probe_x1 = 6;                       // 近造波板
+Real probe_x2 = 11.54;                       // 水槽中部
+Real probe_x3 = 13.08;                       // 近物体（物体初始位置 x = 0.2*DL = 1.6，可调整）
+Real probe_h = 1.3 * particle_spacing_ref; // 探头宽度半高
+
 //----------------------------------------------------------------------
 // 造波板动力学类
 //----------------------------------------------------------------------
@@ -164,8 +186,9 @@ class WaveMaking : public BodyPartMotionConstraint
 {
     WaveFormFunc wave_func_;
     Real *physical_time_;
-
   public:
+    static Real current_vel;
+    static Real getCurrentVelocity() { return current_vel; }
     WaveMaking(BodyPartByParticle &body_part, WaveFormFunc func)
         : BodyPartMotionConstraint(body_part),
           wave_func_(func),
@@ -178,16 +201,17 @@ class WaveMaking : public BodyPartMotionConstraint
         wave_func_(time, disp, vel);
         pos_[index_i] = pos0_[index_i] + Vecd(disp, 0.0);
         vel_[index_i] = Vecd(vel, 0.0);
+        current_vel = vel;
     }
 };
-
+Real WaveMaking::current_vel = 0.0;
 //----------------------------------------------------------------------
 // 消波区域形状
 //----------------------------------------------------------------------
 MultiPolygon createDampingBufferShape()
 {
     std::vector<Vecd> pnts;
-    Real damping_start = DL - 0.5; // 从距离右端 0.5m 处开始阻尼
+    Real damping_start = DL - 0.5; // 从距离右端2m 处开始阻尼
     pnts.push_back(Vecd(damping_start, 0.0));
     pnts.push_back(Vecd(damping_start, DH));
     pnts.push_back(Vecd(DL + BW, DH));
@@ -304,21 +328,21 @@ std::vector<Vecd> createInnerWallShape()
 {
     std::vector<Vecd> inner_wall;
     inner_wall.push_back(Vecd(0.0, 0.0));
-    inner_wall.push_back(Vecd(0.0, DH));
-    inner_wall.push_back(Vecd(DL, DH));
+    inner_wall.push_back(Vecd(0.0, DH + BW)); // 顶部提升到外壁顶部
+    inner_wall.push_back(Vecd(DL, DH + BW));  // 顶部提升到外壁顶部
     inner_wall.push_back(Vecd(DL, 0.0));
     inner_wall.push_back(Vecd(0.0, 0.0));
-
     return inner_wall;
 }
+
 std::vector<Vecd> createCavityInnerShape()
 {
     std::vector<Vecd> inner;
-    inner.push_back(Vecd(-cavity_length, 0.0)); 
-    inner.push_back(Vecd(-cavity_length, DH));  
-    inner.push_back(Vecd(-BW, DH));             
-    inner.push_back(Vecd(-BW, 0.0));            
-    inner.push_back(Vecd(-cavity_length, 0.0)); 
+    inner.push_back(Vecd(-cavity_length, 0.0));
+    inner.push_back(Vecd(-cavity_length, DH + BW)); // 顶部提升到外壁顶部
+    inner.push_back(Vecd(-BW, DH + BW));            // 顶部提升到外壁顶部
+    inner.push_back(Vecd(-BW, 0.0));
+    inner.push_back(Vecd(-cavity_length, 0.0));
     return inner;
 }
 class WettingWallBody : public MultiPolygonShape
@@ -434,24 +458,11 @@ class CylinderInitialCondition : public LocalDynamics
 //----------------------------------------------------------------------
 int main(int ac, char *av[])
 {
-    //----------------------------------------------------------------------
-    //  1. 波浪参数预计算（新增）
-    //----------------------------------------------------------------------
-    //wave_omega = 2.0 * Pi / wave_period;
-    //wave_k = solveDispersionEquation(wave_omega, LH, gravity_g);
-    //wave_stroke = computePistonStroke(wave_height, wave_k, LH);
-    //std::cout << "Wave number k = " << wave_k << ", stroke = " << wave_stroke << std::endl;
 
-    //// 根据波浪相位确定圆柱初始位置
-    //Real cylinder_x = 0.5 * DL;                                        
-    //Real eta0 = 0.5 * wave_height * cos(wave_k * cylinder_x + wave_phase); // t=0时的波面高度
-    //Real cylinder_y = eta0 + LH + 0.2; // 设置圆柱中心 y 坐标
-    //cylinder_center = Vecd(cylinder_x, cylinder_y);
-  
     //----------------------------------------------------------------------
     // 规则波参数
     //----------------------------------------------------------------------
-    //Real H = 0.2;     // 波高 (m)
+    //Real H = 0.15;     // 波高 (m)
     //Real T = 1.0;     // 周期 (s)
     //Real phase = 0.0; // 相位 (rad)
     //WaveFormFunc wave_func = createRegularWave(H, T, phase, LH, gravity_g);
@@ -466,8 +477,8 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     // 双色波参数
     //----------------------------------------------------------------------
-    //Real H1 = 0.12, T1 = 1.2;
-    //Real H2 = 0.08, T2 = 0.8;
+    //Real H1 = 0.0521, T1 = 1.007;
+    //Real H2 = 0.0862, T2 = 1.2866;
     //Real delta_phi = Pi / 3.0; // 相位差
     //WaveFormFunc wave_func = createBiChromaticWave(H1, T1, H2, T2, delta_phi, LH, gravity_g);
 
@@ -483,20 +494,20 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     // 聚焦波参数
     //----------------------------------------------------------------------
-    Real Af = 0.05;       // 谱峰处目标波浪振幅 (m)
-    Real fp = 0.8;        // 谱峰频率 (Hz)
-    Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz
-    int Nf = 31;          // 离散频率数量（奇数可得到对称谱）
-    Real tf = 5.0;        // 聚焦时刻 (s)
-    Real xf = DL / 2.0;   // 聚焦位置 (m) - 水槽中央
-
+    Real Af = 0.09;       // 谱峰处目标波浪振幅 (m)
+    Real fp = 0.83;        // 谱峰频率 (Hz) 能量集中的中心频率，决定波浪周期
+    Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz 频率成分的分布范围，影响波群长度和聚焦程度
+    int Nf = 29;          // 离散频率数量（奇数可得到对称谱）
+    Real tf = 20; // 聚焦时刻 (s)
+    Real xf = 11.54;   // 聚焦位置 (m) - 水槽中央
+                     // DL = 22;  DH = 5; LH = 0.5; 
     WaveFormFunc wave_func = createFocusedWave(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g);
-
-    // 计算初始波面高度（t=0，x=cylinder_x 处）
-    Real cylinder_x = 0.2 * DL;
-    //Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
-    //                                         cylinder_x, 0.0);
-    Real cylinder_y = Af*10 + LH + 0.2;
+    std::cout << "=== Focusing wave: tf = " << tf << ", xf = " << xf << " m" << std::endl;
+     //计算初始波面高度（t=0，x=cylinder_x 处）
+    Real cylinder_x = 0.3 * DL;
+    Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
+                                             cylinder_x, 0.0);
+    Real cylinder_y = Af*10 + LH + 1;
     cylinder_center = Vecd(cylinder_x, cylinder_y);
 
 
@@ -620,7 +631,11 @@ int main(int ac, char *av[])
     SimpleDynamics<NormalDirectionFromBodyShape> wall_boundary_normal_direction(wall_boundary);
     SimpleDynamics<NormalDirectionFromBodyShape> cylinder_normal_direction(cylinder);
 
-    Dynamics1Level<fluid_dynamics::Integration1stHalfWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
+    /** Kernel correction matrix and transport velocity formulation. */
+    InteractionWithUpdate<LinearGradientCorrectionMatrixComplex> kernel_correction_complex(DynamicsArgs(water_block_inner, 0.5), water_block_contact);
+    // Dynamics1Level<fluid_dynamics::Integration1stHalfWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
+    Dynamics1Level<fluid_dynamics::Integration1stHalfCorrectionWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact); // with KGC correction
+
     Dynamics1Level<fluid_dynamics::Integration2ndHalfWithWallRiemann> fluid_density_relaxation(water_block_inner, water_block_contact);
     InteractionWithUpdate<fluid_dynamics::DensitySummationComplexFreeSurface> fluid_density_by_summation(water_block_inner, water_block_contact);
     InteractionWithUpdate<fluid_dynamics::ViscousForceWithWall> viscous_force(water_block_inner, water_block_contact);
@@ -689,12 +704,12 @@ int main(int ac, char *av[])
     /** Mobility of the tethered spot. */
     Vecd displacement0 = cylinder_constraint_area.initial_mass_center_ - tethering_point;
 
-    //SimTK::MobilizedBody::Planar tethered_spot(fixed_spot,
-    //                                           SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], 0.0)),
-    //                                           tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
-     SimTK::MobilizedBody::Planar tethered_spot(matter.Ground(), // connect to ground, not the fixed spot
+    SimTK::MobilizedBody::Planar tethered_spot(fixed_spot,
                                                SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], 0.0)),
                                                tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
+    //SimTK::MobilizedBody::Planar tethered_spot(matter.Ground(), // connect to ground, not the fixed spot
+    //                                           SimTK::Transform(SimTKVec3(displacement0[0], displacement0[1], 0.0)),
+    //                                           tethered_spot_info, SimTK::Transform(SimTKVec3(0)));
     // discrete forces acting on the bodies.
     SimTK::Force::UniformGravity sim_gravity(forces, matter, SimTK::Vec3(0.0, Real(-9.81), 0.0), 0.0);
     SimTK::Force::DiscreteForces force_on_bodies(forces, matter);
@@ -737,6 +752,17 @@ int main(int ac, char *av[])
     body_states_recording.addToWrite<Vecd>(wall_boundary, "NormalDirection"); // output for debug
     RestartIO restart_io(sph_system);
 
+    /** WaveProbes. */
+    Real probe_width = 1.3 * particle_spacing_ref;
+    BodyRegionByCell wave_probe_1(water_block, makeShared<MultiPolygonShape>(createWaveProbeShape(probe_x1, probe_width, LH, DH), "WaveProbe_1"));
+    ReducedQuantityRecording<UpperFrontInAxisDirection<BodyPartByCell>> wave_probe_1_recorder(wave_probe_1, "FreeSurfaceHeight");
+
+    BodyRegionByCell wave_probe_2(water_block, makeShared<MultiPolygonShape>(createWaveProbeShape(probe_x2, probe_width, LH, DH), "WaveProbe_2"));
+    ReducedQuantityRecording<UpperFrontInAxisDirection<BodyPartByCell>> wave_probe_2_recorder(wave_probe_2, "FreeSurfaceHeight");
+
+    BodyRegionByCell wave_probe_3(water_block, makeShared<MultiPolygonShape>(createWaveProbeShape(probe_x3, probe_width, LH, DH), "WaveProbe_3"));
+    ReducedQuantityRecording<UpperFrontInAxisDirection<BodyPartByCell>> wave_probe_3_recorder(wave_probe_3, "FreeSurfaceHeight");
+
     ObservedQuantityRecording<Real> write_cylinder_wetting("Phi", wetting_observer_contact);
     ObservedQuantityRecording<Vecd> write_front_center_position("Position", front_center_observer_contact);
     //----------------------------------------------------------------------
@@ -759,15 +785,18 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     Real &physical_time = *sph_system.getSystemVariableDataByName<Real>("PhysicalTime");
     size_t number_of_iterations = 0;
-    int screen_output_interval = 1; 
-    int observation_sample_interval = screen_output_interval * 1;
-    int restart_output_interval = screen_output_interval * 2000;
+    int screen_output_interval = 100; 
+    //int observation_sample_interval = screen_output_interval * 1;
+    //int restart_output_interval = screen_output_interval * 2000;
     Real end_time = release_time+0.05;
 
 // 计算释放前和释放后的输出间隔
     Real pre_interval = release_time / pre_output_count;
     Real output_interval_vtp = (end_time - release_time) / post_output_count;
     Real output_interval_force = (end_time - release_time) / post_froce_output_count;
+
+    Real next_vtp_output = pre_interval;     // 释放前第一个 VTP 输出时刻
+    Real next_force_output = end_time + 1.0; // 初始时力输出不启用（设为大值）
 
     //----------------------------------------------------------------------
     //	Statistics for CPU time
@@ -782,245 +811,144 @@ int main(int ac, char *av[])
     //	First output before the main loop.
     //----------------------------------------------------------------------
     body_states_recording.writeToFile(0);
+    wave_probe_1_recorder.writeToFile(0);
+    wave_probe_2_recorder.writeToFile(0);
+    wave_probe_3_recorder.writeToFile(0);
     SummaryOutput summary_output("./output/SummaryOutput.dat"); // 创建自定义的汇总输出对象
     //----------------------------------------------------------------------
     //	Main loop starts here.
     //----------------------------------------------------------------------
 
-        /** Integrate time (loop) until the next output time. */
-        // ========== 第一阶段：释放前（仅输出 VTP） ==========
-        while (physical_time < release_time) // 微小量避免浮点误差
+    while (physical_time < end_time)
+    {
+        Real current_vtp_interval = released ? output_interval_vtp : pre_interval;
+        Real next_event_time = end_time;
+        next_event_time = std::min(next_event_time, next_vtp_output);
+        if (released)
+            next_event_time = std::min(next_event_time, next_force_output);
+        Real target_time = std::max(0.0, next_event_time - physical_time);
+        Real integration_time = 0.0;
+        while (integration_time < target_time && physical_time < end_time)
         {
-            Real integration_time = 0.0;
-            while (integration_time < pre_interval && physical_time < release_time )
+            time_instance = TickCount::now();
+            Real Dt = fluid_advection_time_step.exec()*0.5;//
+            fluid_density_by_summation.exec();
+            viscous_force.exec();
+            kernel_correction_complex.exec(); // with KGC correction
+            transport_velocity_correction.exec();
+            interval_computing_time_step += TickCount::now() - time_instance;
+
+            time_instance = TickCount::now();
+            Real relaxation_time = 0.0;
+            Real dt = 0.0;
+            viscous_force_from_fluid.exec(); 
+
+            while (relaxation_time < Dt && physical_time < end_time)
             {
-             
-                time_instance = TickCount::now();
-                Real Dt = fluid_advection_time_step.exec();
-
-                fluid_density_by_summation.exec();
-                viscous_force.exec();
-                transport_velocity_correction.exec();
-                interval_computing_time_step += TickCount::now() - time_instance;
-
-                time_instance = TickCount::now();
-                Real relaxation_time = 0.0;
-                Real dt = 0.0;
-                viscous_force_from_fluid.exec();
-
-                while (relaxation_time < Dt)
-                {
-                    dt = SMIN(SMIN(dt_thermal, fluid_acoustic_time_step.exec()), Dt);
-                    fluid_pressure_relaxation.exec(dt);
-                    pressure_force_from_fluid.exec();
-                    fluid_density_relaxation.exec(dt);
-                    cylinder_wetting.exec(dt);
-
-                    wave_making.exec(dt);
-                    wall_boundary.updateCellLinkedList();
-                    water_block_contact.updateConfiguration();
-
-                    integ.stepBy(dt);
-
-                    if (physical_time < release_time)
-                    {
-                        SimTK::State &state = integ.updAdvancedState();
-                        state.updQ()[0] = displacement0[0];
-                        state.updQ()[1] = displacement0[1];
-                        state.updQ()[2] = 0.0;
-                        state.updU()[0] = 0.0;
-                        state.updU()[1] = 0.0;
-                        state.updU()[2] = 0.0;
-                        MBsystem.realize(state, SimTK::Stage::Velocity);
-                    }
-
-                    SimTK::State &state_for_update = integ.updAdvancedState();
-                    force_on_bodies.clearAllBodyForces(state_for_update);
-                    if (physical_time >= release_time)
-                    {
-                        force_on_bodies.setOneBodyForce(state_for_update, tethered_spot, force_on_tethered_spot.exec());
-                    }
-                    constraint_tethered_spot.exec();
-                    //interpolation_front_center_position.exec();
-
-                    relaxation_time += dt;
-                    integration_time += dt;
-                    physical_time += dt;
-                }
-                interval_computing_fluid_pressure_relaxation += TickCount::now() - time_instance;
-
-                // 屏幕输出（仅时间信息，无数据文件）
-                if (number_of_iterations % screen_output_interval == 0)
-                {
-                    std::cout << std::fixed << std::setprecision(9) << "N=" << number_of_iterations << "	Time = "
-                              << physical_time << "	Dt = " << Dt << "	dt = " << dt << "\n";
-                }
-                number_of_iterations++;
-
-                // 更新链表和配置
-                time_instance = TickCount::now();
-                if (number_of_iterations % 100 == 0 && number_of_iterations != 1)
-                {
-                    particle_sorting.exec();
-                }
-                water_block.updateCellLinkedList();
-                cylinder.updateCellLinkedList();
-                water_block_inner.updateConfiguration();
-                cylinder_inner.updateConfiguration();
-                cylinder_contact.updateConfiguration();
-                water_block_complex.updateConfiguration();
-                front_center_observer_contact.updateConfiguration();
-                free_stream_surface_indicator.exec();
-                damping_wave.exec(Dt);
-                interval_updating_configuration += TickCount::now() - time_instance;
-
-            }
-            // 每个外层步结束后输出一次 VTP（释放前）
-            body_states_recording.writeToFile();
-        }
-        // ========== 第二阶段：释放后（同时输出 VTP 和数据文件） ==========
-
-        Real next_force_output = physical_time + output_interval_force;
-        Real next_vtp_output = physical_time + output_interval_vtp;
-        while (physical_time < end_time)
-        {
-            Real next_output_time = std::min(next_force_output, next_vtp_output);
-            Real time_to_output = next_output_time - physical_time;
-            if (time_to_output < 0)
-                time_to_output = 0.0;
-            Real target_time = std::min(time_to_output, end_time - physical_time);
-            Real integration_time = 0.0;
-            while (integration_time < target_time)
-            {
-
-                time_instance = TickCount::now();
-                Real Dt = fluid_advection_time_step.exec();
-
-                fluid_density_by_summation.exec();
-                viscous_force.exec();
-                transport_velocity_correction.exec();
-                interval_computing_time_step += TickCount::now() - time_instance;
-
-                time_instance = TickCount::now();
-                Real relaxation_time = 0.0;
-                Real dt = 0.0;
-                viscous_force_from_fluid.exec();
-
-                while (relaxation_time < Dt)
-                {
-                    dt = SMIN(SMIN(dt_thermal, fluid_acoustic_time_step.exec()), Dt);
-                    fluid_pressure_relaxation.exec(dt);
-                    pressure_force_from_fluid.exec();
-                    fluid_density_relaxation.exec(dt);
-                    cylinder_wetting.exec(dt);
-                    wave_making.exec(dt);
-                    wall_boundary.updateCellLinkedList();
-                    water_block_contact.updateConfiguration();
-
-                    integ.stepBy(dt);
-                    SimTK::State &state_for_update = integ.updAdvancedState();
-                    // 释放瞬间设置速度（仅一次）
-                    if (!released && physical_time >= release_time)
-                    {
-                        state_for_update.updU()[0] = initial_angular_velocity;
-                        state_for_update.updU()[1] = initial_speed * cos(initial_angle);
-                        state_for_update.updU()[2] = initial_speed * sin(initial_angle);
-                        MBsystem.realize(state_for_update, SimTK::Stage::Velocity);
-                        released = true;
-                    }
-
-                    force_on_bodies.clearAllBodyForces(state_for_update);
-                    if (physical_time >= release_time)
-                    {
-                        force_on_bodies.setOneBodyForce(state_for_update, tethered_spot, force_on_tethered_spot.exec());
-                    }
-                    constraint_tethered_spot.exec();
-
-                    // interpolation_front_center_position.exec();
-
-                    relaxation_time += dt;
-                    integration_time += dt;
-                    physical_time += dt;
-                }
-                interval_computing_fluid_pressure_relaxation += TickCount::now() - time_instance;
-
-
-                if (number_of_iterations % screen_output_interval == 0)
-                {
-                    std::cout << std::fixed << std::setprecision(9) << "N=" << number_of_iterations << "	Time = "
-                              << physical_time << "	Dt = " << Dt << "	dt = " << dt << "\n";
-                    if (number_of_iterations % observation_sample_interval == 0 && number_of_iterations != sph_system.RestartStep())
-                    {
-                        write_cylinder_wetting.writeToFile(number_of_iterations);
-                        write_front_center_position.writeToFile(number_of_iterations);
-                    }
-                    if (number_of_iterations % restart_output_interval == 0)
-                        restart_io.writeToFile(number_of_iterations);
-                }
-                number_of_iterations++;
-
-                // 更新链表和配置（与第一阶段相同）
-                time_instance = TickCount::now();
-                if (number_of_iterations % 100 == 0 && number_of_iterations != 1)
-                {
-                    particle_sorting.exec();
-                }
-                water_block.updateCellLinkedList();
-                cylinder.updateCellLinkedList();
-                water_block_inner.updateConfiguration();
-                cylinder_inner.updateConfiguration();
-                cylinder_contact.updateConfiguration();
-                water_block_complex.updateConfiguration();
-                front_center_observer_contact.updateConfiguration();
-                free_stream_surface_indicator.exec();
-                interval_updating_configuration += TickCount::now() - time_instance;
-                damping_wave.exec(Dt);
-            }
-
-            if (physical_time >= next_force_output)
-            {
-                TickCount t2 = TickCount::now();
-
-                viscous_force_from_fluid.exec();
+                dt = SMIN(SMIN(dt_thermal, fluid_acoustic_time_step.exec()), Dt);
+                fluid_pressure_relaxation.exec(dt);
                 pressure_force_from_fluid.exec();
-                SimTK::State &output_state = integ.updAdvancedState();
+                fluid_density_relaxation.exec(dt);
+                cylinder_wetting.exec(dt);
+                wave_making.exec(dt);
+                wall_boundary.updateCellLinkedList();
+                water_block_contact.updateConfiguration();
 
-                write_total_viscous_force_global.writeToFile(number_of_iterations); // 记录结果到文件
-                write_total_pressure_force_global.writeToFile(number_of_iterations);
+                if (released)
+                {
+                    integ.stepBy(dt);
+                    SimTK::State &state_for_update = integ.updAdvancedState();
+                    force_on_bodies.clearAllBodyForces(state_for_update);
+                    force_on_bodies.setOneBodyForce(state_for_update, tethered_spot, force_on_tethered_spot.exec());
+                    constraint_tethered_spot.exec();
+                }
 
-                Vec2d total_viscous_force_g = calculate_cylinder_total_viscous_force.exec();
-                Vec2d total_pressure_force_g = calculate_cylinder_total_pressure_force.exec();
-                Real current_rotation_from_matrix = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState());
-                Real total_rotation_angle = initial_rotation_angle + current_rotation_from_matrix;
-                Vec2d viscous_local = transformGlobalForceToLocal(total_viscous_force_g, total_rotation_angle);
-                Vec2d pressure_local = transformGlobalForceToLocal(total_pressure_force_g, total_rotation_angle);
-
-                //  获取前段中心观测点位置
-                auto &front_center_particles = front_center_observer.getBaseParticles();
-                Vecd front_center_pos = front_center_particles.getVariableDataByName<Vecd>("Position")[0];
-
-                summary_output.writeData(physical_time,
-                                         total_viscous_force_g,  // 全局粘性力
-                                         total_pressure_force_g, // 全局压力力
-                                         viscous_local,          // 局部压力力X
-                                         pressure_local,         // 新增局部力Y
-                                         front_center_pos);
-                TickCount t3 = TickCount::now();
-                interval += t3 - t2;
-                next_force_output += output_interval_force;
+                relaxation_time += dt;
+                integration_time += dt;
+                physical_time += dt;
             }
-            if (physical_time >= next_vtp_output)
+            interval_computing_fluid_pressure_relaxation += TickCount::now() - time_instance;
+
+            if (number_of_iterations % screen_output_interval == 0)
             {
-                TickCount t4 = TickCount::now();
-
-                body_states_recording.writeToFile();
-
-                TickCount t5 = TickCount::now();
-                interval += t5 - t4;
-                next_vtp_output += output_interval_vtp;
+                std::cout << "N=" << number_of_iterations << "  Time = " << physical_time
+                          << "  Dt = " << Dt << "  dt = " << dt
+                          << "  V_wavemaker = " << WaveMaking::getCurrentVelocity() << "\n";
             }
+            number_of_iterations++;
+
+            time_instance = TickCount::now();
+            if (number_of_iterations % 100 == 0 && number_of_iterations != 1)
+                particle_sorting.exec();
+            water_block.updateCellLinkedList();
+            cylinder.updateCellLinkedList();
+            water_block_inner.updateConfiguration();
+            cylinder_inner.updateConfiguration();
+            cylinder_contact.updateConfiguration();
+            water_block_complex.updateConfiguration();
+            front_center_observer_contact.updateConfiguration();
+            free_stream_surface_indicator.exec();
+            damping_wave.exec(Dt);
+            interval_updating_configuration += TickCount::now() - time_instance;
         }
-   
+
+        if (physical_time >= next_vtp_output )
+        {
+            TickCount t4 = TickCount::now();
+            body_states_recording.writeToFile();
+            wave_probe_1_recorder.writeToFile();
+            wave_probe_2_recorder.writeToFile();
+            wave_probe_3_recorder.writeToFile();
+            TickCount t5 = TickCount::now();
+            interval += t5 - t4; 
+            next_vtp_output += current_vtp_interval;
+            if (next_vtp_output <= physical_time)
+                next_vtp_output = physical_time + current_vtp_interval;
+        }
+
+        if (released && physical_time >= next_force_output)
+        {
+            TickCount t2 = TickCount::now();
+
+            viscous_force_from_fluid.exec();
+            pressure_force_from_fluid.exec();
+            write_total_viscous_force_global.writeToFile(number_of_iterations);
+            write_total_pressure_force_global.writeToFile(number_of_iterations);
+
+            Vec2d total_viscous_force_g = calculate_cylinder_total_viscous_force.exec();
+            Vec2d total_pressure_force_g = calculate_cylinder_total_pressure_force.exec();
+            Real current_rotation = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState());
+            Real total_rotation_angle = initial_rotation_angle + current_rotation;
+            Vec2d viscous_local = transformGlobalForceToLocal(total_viscous_force_g, total_rotation_angle);
+            Vec2d pressure_local = transformGlobalForceToLocal(total_pressure_force_g, total_rotation_angle);
+
+            auto &front_center_particles = front_center_observer.getBaseParticles();
+            Vecd front_center_pos = front_center_particles.getVariableDataByName<Vecd>("Position")[0];
+            summary_output.writeData(physical_time,
+                                     total_viscous_force_g, total_pressure_force_g,
+                                     viscous_local, pressure_local, front_center_pos);
+
+            TickCount t3 = TickCount::now();
+            interval += t3 - t2; 
+            next_force_output += output_interval_force;
+            if (next_force_output <= physical_time)
+                next_force_output = physical_time + output_interval_force;
+        }
+
+
+        if (!released && physical_time >= release_time)
+        {
+            released = true;
+            next_vtp_output = physical_time + output_interval_vtp;
+            next_force_output = physical_time + output_interval_force;
+            SimTK::State &state_for_update = integ.updAdvancedState();
+            state_for_update.updU()[0] = initial_angular_velocity;
+            state_for_update.updU()[1] = initial_speed * cos(initial_angle);
+            state_for_update.updU()[2] = initial_speed * sin(initial_angle);
+            MBsystem.realize(state_for_update, SimTK::Stage::Velocity);
+        }
+    }
+
         TickCount t6 = TickCount::now();
        
     TimeInterval tt;
