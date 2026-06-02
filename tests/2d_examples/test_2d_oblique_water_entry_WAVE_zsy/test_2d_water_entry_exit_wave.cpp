@@ -28,19 +28,19 @@ Vec2d centroid(0.0, 0.0);       /**< 圆柱质心位置（相对于圆柱中心�
 //----------------------------------------------------------------------
 //	Basic geometry parameters and numerical setup.
 //----------------------------------------------------------------------
-Real DL = 4;                         /**< Water tank length. */
+Real DL = 6;                         /**< Water tank length. */
 Real DH = 5;                        /**< Water tank height. */
 Real LH = 2;                         /**< Water column height. */
 Real cavity_length = 1;             // leftover length for wave development
-Real particle_spacing_ref = 0.02;    /**< Initial reference particle spacing. */
+Real particle_spacing_ref = 0.01;    /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4;    /**< Thickness of tank wall. */
 
 //波浪控制参数
-Real release_time = 5; // 造波时长
+Real release_time = 10; // 造波时长
 bool released = false; // 是否已释放
 
 // output control parameters
-int pre_output_count = release_time*10;// vtp output count before release
+int pre_output_count = release_time*30;// vtp output count before release
 int post_output_count = 20;        // vtp output count after release
 int post_froce_output_count = 500;  // force output count after release
 
@@ -65,7 +65,7 @@ Real mu_f = 8.9e-7;      /**< Water dynamics viscosity. */
 //	Wetting parameters
 //----------------------------------------------------------------------
 std::string diffusion_species_name = "Phi";                     //  ϕ∗
-Real diffusion_coeff = 100.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. γ∗ */
+Real diffusion_coeff = 0.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. γ∗ */
 Real fluid_moisture = 1.0;                                   /**< fluid moisture. */
 Real cylinder_moisture = 0.0;                                /**< cylinder moisture. */
 Real wall_moisture = 0.0;                                    /**< wall moisture. */
@@ -174,9 +174,9 @@ MultiPolygon createWaveProbeShape(Real x_center, Real h, Real water_depth, Real 
 }
 
 // 具体探头位置（单位：米）
-Real probe_x1 = 6;                       // 近造波板
-Real probe_x2 = 11.54;                       // 水槽中部
-Real probe_x3 = 13.08;                       // 近物体（物体初始位置 x = 0.2*DL = 1.6，可调整）
+Real probe_x1 = 1;                       // 近造波板
+Real probe_x2 = 2;                       // 水槽中部
+Real probe_x3 = 3;                       // 
 Real probe_h = 1.3 * particle_spacing_ref; // 探头宽度半高
 
 //----------------------------------------------------------------------
@@ -211,7 +211,7 @@ Real WaveMaking::current_vel = 0.0;
 MultiPolygon createDampingBufferShape()
 {
     std::vector<Vecd> pnts;
-    Real damping_start = DL - 0.5; // 从距离右端2m 处开始阻尼
+    Real damping_start = DL - 2; // 从距离右端2m 处开始阻尼
     pnts.push_back(Vecd(damping_start, 0.0));
     pnts.push_back(Vecd(damping_start, DH));
     pnts.push_back(Vecd(DL + BW, DH));
@@ -477,38 +477,38 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     // 双色波参数
     //----------------------------------------------------------------------
-    //Real H1 = 0.0521, T1 = 1.007;
-    //Real H2 = 0.0862, T2 = 1.2866;
-    //Real delta_phi = Pi / 3.0; // 相位差
-    //WaveFormFunc wave_func = createBiChromaticWave(H1, T1, H2, T2, delta_phi, LH, gravity_g);
+    Real H1 = 0.05, T1 = 1.00;
+    Real H2 = 0.08, T2 = 1.3;
+    Real delta_phi = Pi / 3.0; // 相位差
+    WaveFormFunc wave_func = createBiChromaticWave(H1, T1, H2, T2, delta_phi, LH, gravity_g);
 
-    //// 计算初始波面高度
-    //Real cylinder_x = 0.2 * DL;
-    //Real omega1 = 2.0 * Pi / T1, omega2 = 2.0 * Pi / T2;
-    //Real k1 = solveDispersionEquation(omega1, LH, gravity_g);
-    //Real k2 = solveDispersionEquation(omega2, LH, gravity_g);
-    //Real eta0 = 0.5 * H1 * cos(k1 * cylinder_x) + 0.5 * H2 * cos(k2 * cylinder_x + delta_phi);
-    //Real cylinder_y = eta0 + LH + 0.3;
-    //cylinder_center = Vecd(cylinder_x, cylinder_y);
+    // 计算初始波面高度
+    Real cylinder_x = 0.2 * DL;
+    Real omega1 = 2.0 * Pi / T1, omega2 = 2.0 * Pi / T2;
+    Real k1 = solveDispersionEquation(omega1, LH, gravity_g);
+    Real k2 = solveDispersionEquation(omega2, LH, gravity_g);
+    Real eta0 = 0.5 * H1 * cos(k1 * cylinder_x) + 0.5 * H2 * cos(k2 * cylinder_x + delta_phi);
+    Real cylinder_y = eta0 + LH + 0.3;
+    cylinder_center = Vecd(cylinder_x, cylinder_y);
 
     //----------------------------------------------------------------------
     // 聚焦波参数
     //----------------------------------------------------------------------
-    Real Af = 0.09;       // 谱峰处目标波浪振幅 (m)
-    Real fp = 0.83;        // 谱峰频率 (Hz) 能量集中的中心频率，决定波浪周期
-    Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz 频率成分的分布范围，影响波群长度和聚焦程度
-    int Nf = 29;          // 离散频率数量（奇数可得到对称谱）
-    Real tf = 20; // 聚焦时刻 (s)
-    Real xf = 11.54;   // 聚焦位置 (m) - 水槽中央
-                     // DL = 22;  DH = 5; LH = 0.5; 
-    WaveFormFunc wave_func = createFocusedWave(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g);
-    std::cout << "=== Focusing wave: tf = " << tf << ", xf = " << xf << " m" << std::endl;
-     //计算初始波面高度（t=0，x=cylinder_x 处）
-    Real cylinder_x = 0.3 * DL;
-    Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
-                                             cylinder_x, 0.0);
-    Real cylinder_y = Af*10 + LH + 1;
-    cylinder_center = Vecd(cylinder_x, cylinder_y);
+    //Real Af = 0.05;       // 谱峰处目标波浪振幅 (m)
+    //Real fp = 0.8;        // 谱峰频率 (Hz) 能量集中的中心频率，决定波浪周期
+    //Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz 频率成分的分布范围，影响波群长度和聚焦程度
+    //int Nf = 31;          // 离散频率数量（奇数可得到对称谱）
+    //Real tf = 5; // 聚焦时刻 (s)
+    //Real xf = 2.0;   // 聚焦位置 (m) - 水槽中央
+    //                 // DL = 22;  DH = 5; LH = 0.5; 
+    //WaveFormFunc wave_func = createFocusedWave(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g);
+    //std::cout << "=== Focusing wave: tf = " << tf << ", xf = " << xf << " m" << std::endl;
+    // //计算初始波面高度（t=0，x=cylinder_x 处）
+    //Real cylinder_x = 0.3 * DL;
+    //Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
+    //                                         cylinder_x, 0.0);
+    //Real cylinder_y = Af*10 + LH + 1;
+    //cylinder_center = Vecd(cylinder_x, cylinder_y);
 
 
 
@@ -632,10 +632,9 @@ int main(int ac, char *av[])
     SimpleDynamics<NormalDirectionFromBodyShape> cylinder_normal_direction(cylinder);
 
     /** Kernel correction matrix and transport velocity formulation. */
-    InteractionWithUpdate<LinearGradientCorrectionMatrixComplex> kernel_correction_complex(DynamicsArgs(water_block_inner, 0.5), water_block_contact);
+    InteractionWithUpdate<LinearGradientCorrectionMatrixComplex> kernel_correction_complex(DynamicsArgs(water_block_inner, 0.9), water_block_contact);
     // Dynamics1Level<fluid_dynamics::Integration1stHalfWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact);
     Dynamics1Level<fluid_dynamics::Integration1stHalfCorrectionWithWallRiemann> fluid_pressure_relaxation(water_block_inner, water_block_contact); // with KGC correction
-
     Dynamics1Level<fluid_dynamics::Integration2ndHalfWithWallRiemann> fluid_density_relaxation(water_block_inner, water_block_contact);
     InteractionWithUpdate<fluid_dynamics::DensitySummationComplexFreeSurface> fluid_density_by_summation(water_block_inner, water_block_contact);
     InteractionWithUpdate<fluid_dynamics::ViscousForceWithWall> viscous_force(water_block_inner, water_block_contact);
@@ -779,15 +778,13 @@ int main(int ac, char *av[])
     Real dt_thermal = get_thermal_time_step.exec();
     free_stream_surface_indicator.exec();
     constant_gravity.exec();
-    cylinder_set_initial_velocity.exec(); // 执行圆柱初始速度设置
+    cylinder_set_initial_velocity.exec(); 
     //----------------------------------------------------------------------
     //	Setup for time-stepping control
     //----------------------------------------------------------------------
     Real &physical_time = *sph_system.getSystemVariableDataByName<Real>("PhysicalTime");
     size_t number_of_iterations = 0;
     int screen_output_interval = 100; 
-    //int observation_sample_interval = screen_output_interval * 1;
-    //int restart_output_interval = screen_output_interval * 2000;
     Real end_time = release_time+0.05;
 
 // 计算释放前和释放后的输出间隔
@@ -831,7 +828,7 @@ int main(int ac, char *av[])
         while (integration_time < target_time && physical_time < end_time)
         {
             time_instance = TickCount::now();
-            Real Dt = fluid_advection_time_step.exec()*0.5;//
+            Real Dt = fluid_advection_time_step.exec();//change Dt
             fluid_density_by_summation.exec();
             viscous_force.exec();
             kernel_correction_complex.exec(); // with KGC correction
@@ -934,7 +931,6 @@ int main(int ac, char *av[])
             if (next_force_output <= physical_time)
                 next_force_output = physical_time + output_interval_force;
         }
-
 
         if (!released && physical_time >= release_time)
         {
