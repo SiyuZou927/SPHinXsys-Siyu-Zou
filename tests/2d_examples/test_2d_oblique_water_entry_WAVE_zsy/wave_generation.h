@@ -141,7 +141,7 @@ inline WaveFormFunc createFocusedWave(Real Af, Real fp, Real bandwidth, int Nf,
         for (size_t i = 0; i < push_amps.size(); ++i)
         {
             disp += push_amps[i] * cos(omegas[i] * t + phases[i]);
-            vel += push_amps[i] * omegas[i] * sin(omegas[i] * t + phases[i]);
+            vel -= push_amps[i] * omegas[i] * sin(omegas[i] * t + phases[i]);//求导负数
         }
 
     };

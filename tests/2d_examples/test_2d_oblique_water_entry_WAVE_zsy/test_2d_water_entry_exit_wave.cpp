@@ -28,7 +28,7 @@ Vec2d centroid(0.0, 0.0);       /**< 圆柱质心位置（相对于圆柱中心�
 //----------------------------------------------------------------------
 //	Basic geometry parameters and numerical setup.
 //----------------------------------------------------------------------
-Real DL = 6;                         /**< Water tank length. */
+Real DL = 8;                         /**< Water tank length. */
 Real DH = 5;                        /**< Water tank height. */
 Real LH = 2;                         /**< Water column height. */
 Real cavity_length = 1;             // leftover length for wave development
@@ -36,11 +36,11 @@ Real particle_spacing_ref = 0.01;    /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4;    /**< Thickness of tank wall. */
 
 //波浪控制参数
-Real release_time = 10; // 造波时长
+Real release_time = 20; // 造波时长
 bool released = false; // 是否已释放
 
 // output control parameters
-int pre_output_count = release_time*30;// vtp output count before release
+int pre_output_count = release_time*10;// vtp output count before release
 int post_output_count = 20;        // vtp output count after release
 int post_froce_output_count = 500;  // force output count after release
 
@@ -211,7 +211,7 @@ Real WaveMaking::current_vel = 0.0;
 MultiPolygon createDampingBufferShape()
 {
     std::vector<Vecd> pnts;
-    Real damping_start = DL - 2; // 从距离右端2m 处开始阻尼
+    Real damping_start = DL - 4; // 从距离右端2m 处开始阻尼
     pnts.push_back(Vecd(damping_start, 0.0));
     pnts.push_back(Vecd(damping_start, DH));
     pnts.push_back(Vecd(DL + BW, DH));
@@ -462,8 +462,8 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     // 规则波参数
     //----------------------------------------------------------------------
-    //Real H = 0.15;     // 波高 (m)
-    //Real T = 1.0;     // 周期 (s)
+    //Real H = 0.3;     // 波高 (m)
+    //Real T = 2.0;     // 周期 (s)
     //Real phase = 0.0; // 相位 (rad)
     //WaveFormFunc wave_func = createRegularWave(H, T, phase, LH, gravity_g);
     //// 计算初始波面高度和圆柱位置
@@ -477,33 +477,49 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     // 双色波参数
     //----------------------------------------------------------------------
-    Real H1 = 0.05, T1 = 1.00;
-    Real H2 = 0.08, T2 = 1.3;
+    Real H1 = 0.05, T1 = 1.30;//基准0.05 0.08
+    Real H2 = 0.15, T2 = 2.0;
     Real delta_phi = Pi / 3.0; // 相位差
-    WaveFormFunc wave_func = createBiChromaticWave(H1, T1, H2, T2, delta_phi, LH, gravity_g);
+    auto raw_wave_func = createBiChromaticWave(H1, T1, H2, T2, delta_phi, LH, gravity_g);
+
+    // 缓启动时间（秒），一般设为 1~2 倍最大周期，这里取 2.0 秒
+    Real ramp_time = 2.0;
+
+    // 包装后的波浪函数
+    WaveFormFunc wave_func = [raw_wave_func, ramp_time](Real t, Real &disp, Real &vel)
+    {
+        Real ramp = 1.0;
+        if (t < ramp_time)
+        {
+            // 平滑过渡因子：从 0 到 1，导数也为 0 避免二次冲击
+            ramp = 0.5 * (1.0 - std::cos(Pi * t / ramp_time));
+        }
+        raw_wave_func(t, disp, vel);
+        disp *= ramp;
+        vel *= ramp;
+    };
 
     // 计算初始波面高度
-    Real cylinder_x = 0.2 * DL;
+    Real cylinder_x = 0.3 * DL;
     Real omega1 = 2.0 * Pi / T1, omega2 = 2.0 * Pi / T2;
     Real k1 = solveDispersionEquation(omega1, LH, gravity_g);
     Real k2 = solveDispersionEquation(omega2, LH, gravity_g);
     Real eta0 = 0.5 * H1 * cos(k1 * cylinder_x) + 0.5 * H2 * cos(k2 * cylinder_x + delta_phi);
-    Real cylinder_y = eta0 + LH + 0.3;
+    Real cylinder_y = eta0 + LH + 2;
     cylinder_center = Vecd(cylinder_x, cylinder_y);
 
     //----------------------------------------------------------------------
     // 聚焦波参数
     //----------------------------------------------------------------------
-    //Real Af = 0.05;       // 谱峰处目标波浪振幅 (m)
+    //Real Af = 0.2;       // 谱峰处目标波浪振幅 (m)
     //Real fp = 0.8;        // 谱峰频率 (Hz) 能量集中的中心频率，决定波浪周期
     //Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz 频率成分的分布范围，影响波群长度和聚焦程度
     //int Nf = 31;          // 离散频率数量（奇数可得到对称谱）
     //Real tf = 5; // 聚焦时刻 (s)
-    //Real xf = 2.0;   // 聚焦位置 (m) - 水槽中央
-    //                 // DL = 22;  DH = 5; LH = 0.5; 
+    //Real xf = 2.0;   // 聚焦位置 (m) - 水槽中央 
     //WaveFormFunc wave_func = createFocusedWave(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g);
     //std::cout << "=== Focusing wave: tf = " << tf << ", xf = " << xf << " m" << std::endl;
-    // //计算初始波面高度（t=0，x=cylinder_x 处）
+    //// 计算初始波面高度（t=0，x=cylinder_x 处）
     //Real cylinder_x = 0.3 * DL;
     //Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
     //                                         cylinder_x, 0.0);
@@ -525,6 +541,7 @@ int main(int ac, char *av[])
     //sph_system.setRunParticleRelaxation(true);
     //sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
+    //sph_system.setRestartStep(12000);
     //----------------------------------------------------------------------
     //	Creating bodies with corresponding materials and particles.
     //----------------------------------------------------------------------
@@ -560,6 +577,7 @@ int main(int ac, char *av[])
     InnerRelation water_block_inner(water_block);
     InnerRelation cylinder_inner(cylinder);
     ContactRelation water_block_contact(water_block, {&wall_boundary, &cylinder});
+    //ContactRelation water_block_contact(water_block, {&wall_boundary});
     ContactRelation cylinder_contact(cylinder, {&water_block});
     ContactRelation wetting_observer_contact(front_center_observer, {&cylinder});
     ContactRelation front_center_observer_contact(front_center_observer, {&cylinder});
@@ -770,6 +788,7 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     sph_system.initializeSystemCellLinkedLists();
     sph_system.initializeSystemConfigurations();
+
     wall_boundary_normal_direction.exec();
     cylinder_normal_direction.exec();
     wetting_water_initial_condition.exec();
@@ -779,21 +798,43 @@ int main(int ac, char *av[])
     free_stream_surface_indicator.exec();
     constant_gravity.exec();
     cylinder_set_initial_velocity.exec(); 
+
+    //----------------------------------------------------------------------
+    //	Load restart file if necessary.
+    //----------------------------------------------------------------------
+    Real &physical_time = *sph_system.getSystemVariableDataByName<Real>("PhysicalTime");
+    if (sph_system.RestartStep() != 0)
+    {
+        physical_time = restart_io.readRestartFiles(sph_system.RestartStep());
+        // 更新所有 cell 链表和配置
+        water_block.updateCellLinkedList();
+        cylinder.updateCellLinkedList();
+        water_block_inner.updateConfiguration();
+        cylinder_inner.updateConfiguration();
+        cylinder_contact.updateConfiguration();
+        water_block_complex.updateConfiguration();
+        front_center_observer_contact.updateConfiguration();
+        free_stream_surface_indicator.exec(); // 重新标记自由表面
+    }
+
     //----------------------------------------------------------------------
     //	Setup for time-stepping control
     //----------------------------------------------------------------------
-    Real &physical_time = *sph_system.getSystemVariableDataByName<Real>("PhysicalTime");
-    size_t number_of_iterations = 0;
+    size_t number_of_iterations = sph_system.RestartStep();
     int screen_output_interval = 100; 
-    Real end_time = release_time+0.05;
+    int observation_sample_interval = screen_output_interval * 1;
+    int restart_output_interval = screen_output_interval * 20;
+    Real end_time = release_time-0.05;
+    //Real end_time = 0.2;
 
 // 计算释放前和释放后的输出间隔
     Real pre_interval = release_time / pre_output_count;
     Real output_interval_vtp = (end_time - release_time) / post_output_count;
     Real output_interval_force = (end_time - release_time) / post_froce_output_count;
-
+    
     Real next_vtp_output = pre_interval;     // 释放前第一个 VTP 输出时刻
     Real next_force_output = end_time + 1.0; // 初始时力输出不启用（设为大值）
+    
 
     //----------------------------------------------------------------------
     //	Statistics for CPU time
@@ -871,6 +912,14 @@ int main(int ac, char *av[])
                 std::cout << "N=" << number_of_iterations << "  Time = " << physical_time
                           << "  Dt = " << Dt << "  dt = " << dt
                           << "  V_wavemaker = " << WaveMaking::getCurrentVelocity() << "\n";
+                if (number_of_iterations % observation_sample_interval == 0 && number_of_iterations != sph_system.RestartStep())
+                {
+                    wave_probe_1_recorder.writeToFile();
+                    wave_probe_2_recorder.writeToFile();
+                    wave_probe_3_recorder.writeToFile();
+                }
+                if (number_of_iterations % restart_output_interval == 0)
+                    restart_io.writeToFile(number_of_iterations);
             }
             number_of_iterations++;
 
