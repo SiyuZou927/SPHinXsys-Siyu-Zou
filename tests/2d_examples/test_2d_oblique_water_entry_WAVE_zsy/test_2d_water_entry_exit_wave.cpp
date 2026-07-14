@@ -36,7 +36,7 @@ Real particle_spacing_ref = 0.01;    /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4;    /**< Thickness of tank wall. */
 
 //波浪控制参数
-Real release_time = 20; // 造波时长
+Real release_time = 13; // 造波时长
 bool released = false; // 是否已释放
 
 // output control parameters
@@ -127,6 +127,17 @@ Real getCylinderRotationAngle(SimTK::MobilizedBody::Planar &tethered_spot, const
     return angle_from_rot;          
 }
 
+Vecd getSimbodyStationPosition(SimTK::MobilizedBody::Planar &mobod, const SimTK::State &state,
+                               const Vecd &initial_station_position, const Vecd &initial_body_origin)
+{
+    SimTK::Vec3 initial_station(initial_station_position[0] - initial_body_origin[0],
+                                initial_station_position[1] - initial_body_origin[1],
+                                0.0);
+    SimTK::Vec3 current_station =
+        mobod.getBodyOriginLocation(state) + mobod.getBodyRotation(state) * initial_station;
+    return Vecd(current_station[0], current_station[1]);
+}
+
 //----------------------------------------------------------------------
 // 波浪相关辅助函数
 //----------------------------------------------------------------------
@@ -174,9 +185,9 @@ MultiPolygon createWaveProbeShape(Real x_center, Real h, Real water_depth, Real 
 }
 
 // 具体探头位置（单位：米）
-Real probe_x1 = 1;                       // 近造波板
-Real probe_x2 = 2;                       // 水槽中部
-Real probe_x3 = 3;                       // 
+Real probe_x1 = 1;                       
+Real probe_x2 = 2;                     
+Real probe_x3 = 3;                       
 Real probe_h = 1.3 * particle_spacing_ref; // 探头宽度半高
 
 //----------------------------------------------------------------------
@@ -196,7 +207,7 @@ class WaveMaking : public BodyPartMotionConstraint
 
     void update(size_t index_i, Real dt = 0.0)
     {
-        Real time = *physical_time_;
+        Real time = *physical_time_ + dt;
         Real disp = 0.0, vel = 0.0;
         wave_func_(time, disp, vel);
         pos_[index_i] = pos0_[index_i] + Vecd(disp, 0.0);
@@ -477,8 +488,8 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     // 双色波参数
     //----------------------------------------------------------------------
-    Real H1 = 0.05, T1 = 1.30;//基准0.05 0.08
-    Real H2 = 0.15, T2 = 2.0;
+    Real H1 = 0.10, T1 = 1.20;
+    Real H2 = 0.25, T2 = 2.0;
     Real delta_phi = Pi / 3.0; // 相位差
     auto raw_wave_func = createBiChromaticWave(H1, T1, H2, T2, delta_phi, LH, gravity_g);
 
@@ -489,29 +500,34 @@ int main(int ac, char *av[])
     WaveFormFunc wave_func = [raw_wave_func, ramp_time](Real t, Real &disp, Real &vel)
     {
         Real ramp = 1.0;
+        Real ramp_dt = 0.0;
         if (t < ramp_time)
         {
             // 平滑过渡因子：从 0 到 1，导数也为 0 避免二次冲击
             ramp = 0.5 * (1.0 - std::cos(Pi * t / ramp_time));
+            ramp_dt = 0.5 * Pi / ramp_time * std::sin(Pi * t / ramp_time);
         }
-        raw_wave_func(t, disp, vel);
-        disp *= ramp;
-        vel *= ramp;
+        Real raw_disp = 0.0, raw_vel = 0.0;
+        raw_wave_func(t, raw_disp, raw_vel);
+        disp = ramp * raw_disp;
+        vel = ramp * raw_vel + ramp_dt * raw_disp;
     };
 
-    // 计算初始波面高度
-    Real cylinder_x = 0.3 * DL;
+     //计算初始波面高度
+    //Real cylinder_x = 0.3 * DL;
     Real omega1 = 2.0 * Pi / T1, omega2 = 2.0 * Pi / T2;
     Real k1 = solveDispersionEquation(omega1, LH, gravity_g);
     Real k2 = solveDispersionEquation(omega2, LH, gravity_g);
-    Real eta0 = 0.5 * H1 * cos(k1 * cylinder_x) + 0.5 * H2 * cos(k2 * cylinder_x + delta_phi);
-    Real cylinder_y = eta0 + LH + 2;
+    //Real eta0 = 0.5 * H1 * cos(k1 * cylinder_x) + 0.5 * H2 * cos(k2 * cylinder_x + delta_phi);
+    //Real cylinder_y = eta0 + LH + 2;
+    Real cylinder_x =1.74;
+    Real cylinder_y = 2.255;
     cylinder_center = Vecd(cylinder_x, cylinder_y);
 
     //----------------------------------------------------------------------
     // 聚焦波参数
     //----------------------------------------------------------------------
-    //Real Af = 0.2;       // 谱峰处目标波浪振幅 (m)
+    //Real Af = 0.15;       // 谱峰处目标波浪振幅 (m)
     //Real fp = 0.8;        // 谱峰频率 (Hz) 能量集中的中心频率，决定波浪周期
     //Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz 频率成分的分布范围，影响波群长度和聚焦程度
     //int Nf = 31;          // 离散频率数量（奇数可得到对称谱）
@@ -520,16 +536,21 @@ int main(int ac, char *av[])
     //WaveFormFunc wave_func = createFocusedWave(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g);
     //std::cout << "=== Focusing wave: tf = " << tf << ", xf = " << xf << " m" << std::endl;
     //// 计算初始波面高度（t=0，x=cylinder_x 处）
-    //Real cylinder_x = 0.3 * DL;
+    ////Real cylinder_x = 0.3 * DL;
+    //Real cylinder_x = 0.742374;
     //Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
     //                                         cylinder_x, 0.0);
-    //Real cylinder_y = Af*10 + LH + 1;
+    ////Real cylinder_y = Af*10 + LH + 1;
+    //Real cylinder_y = 2.154995;
     //cylinder_center = Vecd(cylinder_x, cylinder_y);
 
 
 
     std::cout << "Cylinder initial position: (" << cylinder_center[0] << ", " << cylinder_center[1] << ")" << std::endl;
     front_center_observer_location = {resetFrontCenterObserverPosition()}; // 更新依赖 cylinder_center 的观测点位置
+    std::cout << "Cylinder observer position: ("
+              << front_center_observer_location[0][0] << ", "
+              << front_center_observer_location[0][1] << ")" << std::endl;
     //----------------------------------------------------------------------
     //	Build up an SPHSystem.
     //----------------------------------------------------------------------
@@ -538,10 +559,10 @@ int main(int ac, char *av[])
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
     sph_system.setRunParticleRelaxation(false);
     sph_system.setReloadParticles(true);
+    sph_system.setRestartStep(30000);
     //sph_system.setRunParticleRelaxation(true);
     //sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
-    //sph_system.setRestartStep(12000);
     //----------------------------------------------------------------------
     //	Creating bodies with corresponding materials and particles.
     //----------------------------------------------------------------------
@@ -745,6 +766,9 @@ int main(int ac, char *av[])
     MBsystem.realize(state, SimTK::Stage::Velocity);
     MBsystem.realize(state, SimTK::Stage::Acceleration);
     MBsystem.realize(state, SimTK::Stage::Dynamics);
+    SimTK::Vec3 initial_body_origin_simtk = tethered_spot.getBodyOriginLocation(state);
+    Vecd initial_body_origin(initial_body_origin_simtk[0], initial_body_origin_simtk[1]);
+    Vecd initial_front_center_position = front_center_observer_location[0];
      
     /** Time stepping method for multibody system.*/
     SimTK::RungeKuttaMersonIntegrator integ(MBsystem);
@@ -782,6 +806,8 @@ int main(int ac, char *av[])
 
     ObservedQuantityRecording<Real> write_cylinder_wetting("Phi", wetting_observer_contact);
     ObservedQuantityRecording<Vecd> write_front_center_position("Position", front_center_observer_contact);
+    Vecd *front_center_position_data =
+        front_center_observer.getBaseParticles().getVariableDataByName<Vecd>("Position");
     //----------------------------------------------------------------------
     //	Prepare the simulation with cell linked list, configuration
     //	and case specified initial condition if necessary.
@@ -798,6 +824,8 @@ int main(int ac, char *av[])
     free_stream_surface_indicator.exec();
     constant_gravity.exec();
     cylinder_set_initial_velocity.exec(); 
+    front_center_position_data[0] = getSimbodyStationPosition(
+        tethered_spot, integ.getAdvancedState(), initial_front_center_position, initial_body_origin);
 
     //----------------------------------------------------------------------
     //	Load restart file if necessary.
@@ -806,13 +834,19 @@ int main(int ac, char *av[])
     if (sph_system.RestartStep() != 0)
     {
         physical_time = restart_io.readRestartFiles(sph_system.RestartStep());
+        wave_making.exec(0.0);
+        front_center_position_data[0] = getSimbodyStationPosition(
+            tethered_spot, integ.getAdvancedState(), initial_front_center_position, initial_body_origin);
         // 更新所有 cell 链表和配置
         water_block.updateCellLinkedList();
+        wall_boundary.updateCellLinkedList();
         cylinder.updateCellLinkedList();
         water_block_inner.updateConfiguration();
         cylinder_inner.updateConfiguration();
+        water_block_contact.updateConfiguration();
         cylinder_contact.updateConfiguration();
         water_block_complex.updateConfiguration();
+        wetting_observer_contact.updateConfiguration();
         front_center_observer_contact.updateConfiguration();
         free_stream_surface_indicator.exec(); // 重新标记自由表面
     }
@@ -823,9 +857,9 @@ int main(int ac, char *av[])
     size_t number_of_iterations = sph_system.RestartStep();
     int screen_output_interval = 100; 
     int observation_sample_interval = screen_output_interval * 1;
-    int restart_output_interval = screen_output_interval * 20;
-    Real end_time = release_time-0.05;
-    //Real end_time = 0.2;
+    int restart_output_interval = screen_output_interval * 10;
+    Real end_time = release_time+0.15;
+
 
 // 计算释放前和释放后的输出间隔
     Real pre_interval = release_time / pre_output_count;
@@ -852,6 +886,9 @@ int main(int ac, char *av[])
     wave_probe_1_recorder.writeToFile(0);
     wave_probe_2_recorder.writeToFile(0);
     wave_probe_3_recorder.writeToFile(0);
+    write_front_center_position.writeToFile(number_of_iterations);
+    front_center_position_data[0] = getSimbodyStationPosition(
+        tethered_spot, integ.getAdvancedState(), initial_front_center_position, initial_body_origin);
     SummaryOutput summary_output("./output/SummaryOutput.dat"); // 创建自定义的汇总输出对象
     //----------------------------------------------------------------------
     //	Main loop starts here.
@@ -932,6 +969,9 @@ int main(int ac, char *av[])
             cylinder_inner.updateConfiguration();
             cylinder_contact.updateConfiguration();
             water_block_complex.updateConfiguration();
+            front_center_position_data[0] = getSimbodyStationPosition(
+                tethered_spot, integ.getAdvancedState(), initial_front_center_position, initial_body_origin);
+            wetting_observer_contact.updateConfiguration();
             front_center_observer_contact.updateConfiguration();
             free_stream_surface_indicator.exec();
             damping_wave.exec(Dt);
@@ -945,6 +985,7 @@ int main(int ac, char *av[])
             wave_probe_1_recorder.writeToFile();
             wave_probe_2_recorder.writeToFile();
             wave_probe_3_recorder.writeToFile();
+
             TickCount t5 = TickCount::now();
             interval += t5 - t4; 
             next_vtp_output += current_vtp_interval;
@@ -968,8 +1009,14 @@ int main(int ac, char *av[])
             Vec2d viscous_local = transformGlobalForceToLocal(total_viscous_force_g, total_rotation_angle);
             Vec2d pressure_local = transformGlobalForceToLocal(total_pressure_force_g, total_rotation_angle);
 
-            auto &front_center_particles = front_center_observer.getBaseParticles();
-            Vecd front_center_pos = front_center_particles.getVariableDataByName<Vecd>("Position")[0];
+            Vecd front_center_pos = getSimbodyStationPosition(
+                tethered_spot, integ.getAdvancedState(), initial_front_center_position, initial_body_origin);
+            front_center_position_data[0] = front_center_pos;
+            wetting_observer_contact.updateConfiguration();
+            front_center_observer_contact.updateConfiguration();
+            write_cylinder_wetting.writeToFile(number_of_iterations);
+            write_front_center_position.writeToFile(number_of_iterations);
+            front_center_position_data[0] = front_center_pos;
             summary_output.writeData(physical_time,
                                      total_viscous_force_g, total_pressure_force_g,
                                      viscous_local, pressure_local, front_center_pos);
@@ -1009,6 +1056,3 @@ int main(int ac, char *av[])
 
     return 0;
 };
-
-
-

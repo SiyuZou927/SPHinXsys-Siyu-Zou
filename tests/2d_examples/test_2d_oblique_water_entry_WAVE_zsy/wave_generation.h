@@ -150,6 +150,41 @@ inline WaveFormFunc createFocusedWave(Real Af, Real fp, Real bandwidth, int Nf,
 // ---------- 辅助函数：计算聚焦波在任意时刻、任意位置的波面高度（用于初始条件）----------
 // 参数与 createFocusedWave 完全相同，额外输入位置 x (m) 和时间 t (s)
 // 返回波面高度 η (m)（注意：该函数不涉及推板传递函数，直接输出目标波浪振幅叠加结果）
+//inline Real evaluateFocusedWaveElevation(Real Af, Real fp, Real bandwidth, int Nf,
+//                                         Real tf, Real xf, Real h, Real g,
+//                                         Real x, Real t)
+//{
+//    if (Nf < 2)
+//        Nf = 2;
+//    Real omega_peak = 2.0 * Pi * fp;
+//    Real domega = 2.0 * Pi * (bandwidth / (Nf - 1));
+//    Real omega_min = omega_peak - 0.5 * (2.0 * Pi * bandwidth);
+//    Real sigma_omega = 2.0 * Pi * (bandwidth / 6.0);
+//
+//    std::vector<Real> target_amps(Nf), omegas(Nf), k(Nf), phases(Nf);
+//    for (int i = 0; i < Nf; ++i)
+//    {
+//        omegas[i] = omega_min + i * domega;
+//        Real env = std::exp(-0.5 * std::pow((omegas[i] - omega_peak) / sigma_omega, 2));
+//        target_amps[i] = env;
+//    }
+//    Real max_env = *std::max_element(target_amps.begin(), target_amps.end());
+//    for (int i = 0; i < Nf; ++i)
+//    {
+//        target_amps[i] = Af * (target_amps[i] / max_env);
+//        k[i] = solveDispersionEquation(omegas[i], h, g);
+//        // 与造波板相位保持一致
+//        phases[i] = -omegas[i] * tf +  k[i] * xf;
+//    }
+//
+//    Real eta = 0.0;
+//    for (int i = 0; i < Nf; ++i)
+//    {
+//        //  波面 η = a * cos(ωt - kx + φ)
+//        eta += target_amps[i] * cos(omegas[i] * t - k[i] * x + phases[i]);
+//    }
+//    return eta;
+//}
 inline Real evaluateFocusedWaveElevation(Real Af, Real fp, Real bandwidth, int Nf,
                                          Real tf, Real xf, Real h, Real g,
                                          Real x, Real t)
@@ -161,26 +196,36 @@ inline Real evaluateFocusedWaveElevation(Real Af, Real fp, Real bandwidth, int N
     Real omega_min = omega_peak - 0.5 * (2.0 * Pi * bandwidth);
     Real sigma_omega = 2.0 * Pi * (bandwidth / 6.0);
 
-    std::vector<Real> target_amps(Nf), omegas(Nf), k(Nf), phases(Nf);
+    std::vector<Real> omegas(Nf), S(Nf), target_amps(Nf), k(Nf), phases(Nf);
+
+    // 1. 计算频率和高斯谱密度 S(ω)
     for (int i = 0; i < Nf; ++i)
     {
         omegas[i] = omega_min + i * domega;
-        Real env = std::exp(-0.5 * std::pow((omegas[i] - omega_peak) / sigma_omega, 2));
-        target_amps[i] = env;
-    }
-    Real max_env = *std::max_element(target_amps.begin(), target_amps.end());
-    for (int i = 0; i < Nf; ++i)
-    {
-        target_amps[i] = Af * (target_amps[i] / max_env);
-        k[i] = solveDispersionEquation(omegas[i], h, g);
-        // 与造波板相位保持一致
-        phases[i] = -omegas[i] * tf +  k[i] * xf;
+        S[i] = std::exp(-0.5 * std::pow((omegas[i] - omega_peak) / sigma_omega, 2));
     }
 
+    // 2. 计算谱密度积分（能量归一化因子）
+    Real sum_S = 0.0;
+    for (int i = 0; i < Nf; ++i)
+    {
+        sum_S += S[i] * domega;
+    }
+
+    // 3. 分配各频率成分的目标波幅（与 createFocusedWave 一致）
+    for (int i = 0; i < Nf; ++i)
+    {
+        target_amps[i] = Af * (S[i] * domega) / sum_S; // 与造波板振幅分配一致
+
+        // 色散关系和相位（与造波板保持一致）
+        k[i] = solveDispersionEquation(omegas[i], h, g);
+        phases[i] = -omegas[i] * tf + k[i] * xf;
+    }
+
+    // 4. 计算给定位置 x、时间 t 的波面高度
     Real eta = 0.0;
     for (int i = 0; i < Nf; ++i)
     {
-        //  波面 η = a * cos(ωt - kx + φ)
         eta += target_amps[i] * cos(omegas[i] * t - k[i] * x + phases[i]);
     }
     return eta;
