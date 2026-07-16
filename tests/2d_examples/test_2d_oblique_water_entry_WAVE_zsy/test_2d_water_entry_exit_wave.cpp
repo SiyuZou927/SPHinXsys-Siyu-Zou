@@ -11,6 +11,7 @@
 // #include "2d_flow_around_cylinder.h"
 #include "sphinxsys.h" //SPHinXsys Library.
 #include "wave_generation.h"
+#include <fstream>
 using namespace SPH;   // Namespace cite here.
 
 //----------------------------------------------------------------------
@@ -792,6 +793,7 @@ int main(int ac, char *av[])
     body_states_recording.addToWrite<int>(water_block, "Indicator");          // output for debug
     body_states_recording.addToWrite<Vecd>(wall_boundary, "NormalDirection"); // output for debug
     RestartIO restart_io(sph_system);
+    SimbodyStateEngine simbody_state_engine(sph_system, MBsystem);
 
     /** WaveProbes. */
     Real probe_width = 1.3 * particle_spacing_ref;
@@ -833,7 +835,42 @@ int main(int ac, char *av[])
     Real &physical_time = *sph_system.getSystemVariableDataByName<Real>("PhysicalTime");
     if (sph_system.RestartStep() != 0)
     {
+        // Particle restart restores SPH bodies only.  After release, the rigid-body
+        // coordinates and velocities also have to be restored into the Simbody integrator.
         physical_time = restart_io.readRestartFiles(sph_system.RestartStep());
+        released = physical_time >= release_time;
+        if (released)
+        {
+            std::string simbody_restart_file = sph_system.getIOEnvironment().RestartFolder() +
+                                               "/simbody_rst_" + std::to_string(sph_system.RestartStep()) + ".xml";
+            std::ifstream simbody_restart_stream(simbody_restart_file.c_str());
+            bool has_simbody_restart = simbody_restart_stream.good();
+            simbody_restart_stream.close();
+            if (has_simbody_restart)
+            {
+                SimTK::State restart_state = integ.getAdvancedState();
+                simbody_state_engine.readStateFromXml(sph_system.RestartStep(), restart_state);
+                restart_state.setTime(physical_time);
+                MBsystem.realize(restart_state, SimTK::Stage::Velocity);
+                integ.initialize(restart_state);
+            }
+            else
+            {
+                std::cout << "\n Warning: missing Simbody restart file " << simbody_restart_file
+                          << ". Continue with the default Simbody pose and release velocity; "
+                          << "rerun once to generate exact Simbody restart states.\n";
+                SimTK::State &state_for_update = integ.updAdvancedState();
+                state_for_update.setTime(physical_time);
+                state_for_update.updU()[0] = initial_angular_velocity;
+                state_for_update.updU()[1] = initial_speed * cos(initial_angle);
+                state_for_update.updU()[2] = initial_speed * sin(initial_angle);
+                MBsystem.realize(state_for_update, SimTK::Stage::Velocity);
+            }
+            constraint_tethered_spot.exec();
+        }
+
+        // Re-project the wavemaker to the prescribed analytical state at the restart time.
+        // This keeps wall-particle position and velocity consistent with wave_func(t).
         wave_making.exec(0.0);
         front_center_position_data[0] = getSimbodyStationPosition(
             tethered_spot, integ.getAdvancedState(), initial_front_center_position, initial_body_origin);
@@ -860,15 +897,66 @@ int main(int ac, char *av[])
     int restart_output_interval = screen_output_interval * 10;
     Real end_time = release_time+0.15;
 
-
-// 计算释放前和释放后的输出间隔
+    // 计算释放前和释放后的输出间隔。
+    // 释放后的 VTP 输出固定锚定在 release_time，避免 restart 或时间步截断导致漂移。
     Real pre_interval = release_time / pre_output_count;
     Real output_interval_vtp = (end_time - release_time) / post_output_count;
     Real output_interval_force = (end_time - release_time) / post_froce_output_count;
     
     Real next_vtp_output = pre_interval;     // 释放前第一个 VTP 输出时刻
     Real next_force_output = end_time + 1.0; // 初始时力输出不启用（设为大值）
-    
+    auto nextMultipleTime = [](Real interval, Real current_time) -> Real
+    {
+        return (std::floor(current_time / interval) + 1.0) * interval;
+    };
+
+    auto nextAnchoredTime = [](Real first_time, Real interval, Real current_time) -> Real
+    {
+        if (current_time < first_time)
+            return first_time;
+        return first_time + (std::floor((current_time - first_time) / interval) + 1.0) * interval;
+    };
+
+    auto advanceScheduledTime = [](Real &scheduled_time, Real interval, Real current_time)
+    {
+        scheduled_time += interval;
+        if (scheduled_time <= current_time)
+        {
+            scheduled_time +=
+                (std::floor((current_time - scheduled_time) / interval) + 1.0) * interval;
+        }
+    };
+
+    auto resetOutputSchedule = [&]()
+    {
+        if (released)
+        {
+            next_vtp_output = nextAnchoredTime(release_time + output_interval_vtp, output_interval_vtp, physical_time);
+            next_force_output = nextAnchoredTime(release_time + output_interval_force, output_interval_force, physical_time);
+        }
+        else
+        {
+            next_vtp_output = nextMultipleTime(pre_interval, physical_time);
+            next_force_output = end_time + 1.0;
+        }
+    };
+
+    auto releaseCylinder = [&]()
+    {
+        if (released)
+            return;
+
+        released = true;
+        SimTK::State &state_for_update = integ.updAdvancedState();
+        state_for_update.setTime(physical_time);
+        state_for_update.updU()[0] = initial_angular_velocity;
+        state_for_update.updU()[1] = initial_speed * cos(initial_angle);
+        state_for_update.updU()[2] = initial_speed * sin(initial_angle);
+        MBsystem.realize(state_for_update, SimTK::Stage::Velocity);
+        next_vtp_output = release_time + output_interval_vtp;
+        next_force_output = release_time + output_interval_force;
+    };
+    resetOutputSchedule();
 
     //----------------------------------------------------------------------
     //	Statistics for CPU time
@@ -886,9 +974,9 @@ int main(int ac, char *av[])
     wave_probe_1_recorder.writeToFile(0);
     wave_probe_2_recorder.writeToFile(0);
     wave_probe_3_recorder.writeToFile(0);
-    write_front_center_position.writeToFile(number_of_iterations);
     front_center_position_data[0] = getSimbodyStationPosition(
         tethered_spot, integ.getAdvancedState(), initial_front_center_position, initial_body_origin);
+    write_front_center_position.writeToFile(number_of_iterations);
     SummaryOutput summary_output("./output/SummaryOutput.dat"); // 创建自定义的汇总输出对象
     //----------------------------------------------------------------------
     //	Main loop starts here.
@@ -896,9 +984,12 @@ int main(int ac, char *av[])
 
     while (physical_time < end_time)
     {
-        Real current_vtp_interval = released ? output_interval_vtp : pre_interval;
+        // Each outer pass integrates exactly to the next event: VTP output, force output,
+        // release time, or end_time.  Treating release_time as an event prevents delayed release.
         Real next_event_time = end_time;
         next_event_time = std::min(next_event_time, next_vtp_output);
+        if (!released)
+            next_event_time = std::min(next_event_time, release_time);
         if (released)
             next_event_time = std::min(next_event_time, next_force_output);
         Real target_time = std::max(0.0, next_event_time - physical_time);
@@ -918,9 +1009,18 @@ int main(int ac, char *av[])
             Real dt = 0.0;
             viscous_force_from_fluid.exec(); 
 
-            while (relaxation_time < Dt && physical_time < end_time)
+            while (relaxation_time < Dt && integration_time < target_time && physical_time < end_time)
             {
-                dt = SMIN(SMIN(dt_thermal, fluid_acoustic_time_step.exec()), Dt);
+                // Clip the acoustic step to the remaining event time so the solver does not
+                // step across release_time or a scheduled output time.
+                Real remaining_relaxation_time = Dt - relaxation_time;
+                Real remaining_integration_time = target_time - integration_time;
+                Real remaining_physical_time = end_time - physical_time;
+                if (remaining_relaxation_time <= TinyReal || remaining_integration_time <= TinyReal ||
+                    remaining_physical_time <= TinyReal)
+                    break;
+                dt = SMIN(dt_thermal, fluid_acoustic_time_step.exec(), remaining_relaxation_time,
+                          remaining_integration_time, remaining_physical_time);
                 fluid_pressure_relaxation.exec(dt);
                 pressure_force_from_fluid.exec();
                 fluid_density_relaxation.exec(dt);
@@ -956,7 +1056,11 @@ int main(int ac, char *av[])
                     wave_probe_3_recorder.writeToFile();
                 }
                 if (number_of_iterations % restart_output_interval == 0)
+                {
                     restart_io.writeToFile(number_of_iterations);
+                    // Simbody state is written beside the SPH particle restart files.
+                    simbody_state_engine.writeStateToXml((int)number_of_iterations, integ);
+                }
             }
             number_of_iterations++;
 
@@ -978,7 +1082,10 @@ int main(int ac, char *av[])
             interval_updating_configuration += TickCount::now() - time_instance;
         }
 
-        if (physical_time >= next_vtp_output )
+        if (!released && physical_time >= release_time)
+            releaseCylinder();
+
+        if (physical_time >= next_vtp_output)
         {
             TickCount t4 = TickCount::now();
             body_states_recording.writeToFile();
@@ -988,9 +1095,8 @@ int main(int ac, char *av[])
 
             TickCount t5 = TickCount::now();
             interval += t5 - t4; 
-            next_vtp_output += current_vtp_interval;
-            if (next_vtp_output <= physical_time)
-                next_vtp_output = physical_time + current_vtp_interval;
+            Real current_vtp_interval = released ? output_interval_vtp : pre_interval;
+            advanceScheduledTime(next_vtp_output, current_vtp_interval, physical_time);
         }
 
         if (released && physical_time >= next_force_output)
@@ -1023,25 +1129,11 @@ int main(int ac, char *av[])
 
             TickCount t3 = TickCount::now();
             interval += t3 - t2; 
-            next_force_output += output_interval_force;
-            if (next_force_output <= physical_time)
-                next_force_output = physical_time + output_interval_force;
-        }
-
-        if (!released && physical_time >= release_time)
-        {
-            released = true;
-            next_vtp_output = physical_time + output_interval_vtp;
-            next_force_output = physical_time + output_interval_force;
-            SimTK::State &state_for_update = integ.updAdvancedState();
-            state_for_update.updU()[0] = initial_angular_velocity;
-            state_for_update.updU()[1] = initial_speed * cos(initial_angle);
-            state_for_update.updU()[2] = initial_speed * sin(initial_angle);
-            MBsystem.realize(state_for_update, SimTK::Stage::Velocity);
+            advanceScheduledTime(next_force_output, output_interval_force, physical_time);
         }
     }
 
-        TickCount t6 = TickCount::now();
+    TickCount t6 = TickCount::now();
        
     TimeInterval tt;
     tt = t6 - t1 - interval;
