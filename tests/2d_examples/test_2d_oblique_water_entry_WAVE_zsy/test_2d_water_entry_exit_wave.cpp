@@ -11,7 +11,7 @@
 // #include "2d_flow_around_cylinder.h"
 #include "sphinxsys.h" //SPHinXsys Library.
 #include "wave_generation.h"
-#include <fstream>
+#include <fstream> // 用来检查释放后 restart 是否有对应的 Simbody 状态文件。
 using namespace SPH;   // Namespace cite here.
 
 //----------------------------------------------------------------------
@@ -33,11 +33,11 @@ Real DL = 8;                         /**< Water tank length. */
 Real DH = 5;                        /**< Water tank height. */
 Real LH = 2;                         /**< Water column height. */
 Real cavity_length = 1;             // leftover length for wave development
-Real particle_spacing_ref = 0.01;    /**< Initial reference particle spacing. */
+Real particle_spacing_ref = 0.003;    /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4;    /**< Thickness of tank wall. */
 
 //波浪控制参数
-Real release_time = 13; // 造波时长
+Real release_time = 8; // 造波时长
 bool released = false; // 是否已释放
 
 // output control parameters
@@ -483,67 +483,67 @@ int main(int ac, char *av[])
     //Real omega = 2.0 * Pi / T;
     //Real k = solveDispersionEquation(omega, LH, gravity_g);
     //Real eta0 = 0.5 * H * cos(k * cylinder_x + phase); // 规则波波面
-    //Real cylinder_y = eta0 + LH + 0.2;
+    //Real cylinder_y = eta0 + LH + 0.5;
     //cylinder_center = Vecd(cylinder_x, cylinder_y);
 
     //----------------------------------------------------------------------
     // 双色波参数
     //----------------------------------------------------------------------
-    Real H1 = 0.10, T1 = 1.20;
-    Real H2 = 0.25, T2 = 2.0;
-    Real delta_phi = Pi / 3.0; // 相位差
-    auto raw_wave_func = createBiChromaticWave(H1, T1, H2, T2, delta_phi, LH, gravity_g);
+    //Real H1 = 0.10, T1 = 1.20;
+    //Real H2 = 0.25, T2 = 2.0;
+    //Real delta_phi = Pi / 3.0; // 相位差
+    //auto raw_wave_func = createBiChromaticWave(H1, T1, H2, T2, delta_phi, LH, gravity_g);
 
-    // 缓启动时间（秒），一般设为 1~2 倍最大周期，这里取 2.0 秒
-    Real ramp_time = 2.0;
+    //// 缓启动时间（秒），一般设为 1~2 倍最大周期，这里取 2.0 秒
+    //Real ramp_time = 2.0;
 
-    // 包装后的波浪函数
-    WaveFormFunc wave_func = [raw_wave_func, ramp_time](Real t, Real &disp, Real &vel)
-    {
-        Real ramp = 1.0;
-        Real ramp_dt = 0.0;
-        if (t < ramp_time)
-        {
-            // 平滑过渡因子：从 0 到 1，导数也为 0 避免二次冲击
-            ramp = 0.5 * (1.0 - std::cos(Pi * t / ramp_time));
-            ramp_dt = 0.5 * Pi / ramp_time * std::sin(Pi * t / ramp_time);
-        }
-        Real raw_disp = 0.0, raw_vel = 0.0;
-        raw_wave_func(t, raw_disp, raw_vel);
-        disp = ramp * raw_disp;
-        vel = ramp * raw_vel + ramp_dt * raw_disp;
-    };
+    //// 包装后的波浪函数
+    //WaveFormFunc wave_func = [raw_wave_func, ramp_time](Real t, Real &disp, Real &vel)
+    //{
+    //    Real ramp = 1.0;
+    //    Real ramp_dt = 0.0;
+    //    if (t < ramp_time)
+    //    {
+    //        // 平滑过渡因子：从 0 到 1，导数也为 0 避免二次冲击
+    //        ramp = 0.5 * (1.0 - std::cos(Pi * t / ramp_time));
+    //        ramp_dt = 0.5 * Pi / ramp_time * std::sin(Pi * t / ramp_time);
+    //    }
+    //    Real raw_disp = 0.0, raw_vel = 0.0;
+    //    raw_wave_func(t, raw_disp, raw_vel);
+    //    disp = ramp * raw_disp;
+    //    vel = ramp * raw_vel + ramp_dt * raw_disp;
+    //};
 
-     //计算初始波面高度
-    //Real cylinder_x = 0.3 * DL;
-    Real omega1 = 2.0 * Pi / T1, omega2 = 2.0 * Pi / T2;
-    Real k1 = solveDispersionEquation(omega1, LH, gravity_g);
-    Real k2 = solveDispersionEquation(omega2, LH, gravity_g);
-    //Real eta0 = 0.5 * H1 * cos(k1 * cylinder_x) + 0.5 * H2 * cos(k2 * cylinder_x + delta_phi);
-    //Real cylinder_y = eta0 + LH + 2;
-    Real cylinder_x =1.74;
-    Real cylinder_y = 2.255;
-    cylinder_center = Vecd(cylinder_x, cylinder_y);
+    // //计算初始波面高度
+    ////Real cylinder_x = 0.3 * DL;
+    //Real omega1 = 2.0 * Pi / T1, omega2 = 2.0 * Pi / T2;
+    //Real k1 = solveDispersionEquation(omega1, LH, gravity_g);
+    //Real k2 = solveDispersionEquation(omega2, LH, gravity_g);
+    ////Real eta0 = 0.5 * H1 * cos(k1 * cylinder_x) + 0.5 * H2 * cos(k2 * cylinder_x + delta_phi);
+    ////Real cylinder_y = eta0 + LH + 2;
+    //Real cylinder_x =1.74;
+    //Real cylinder_y = 2.255;
+    //cylinder_center = Vecd(cylinder_x, cylinder_y);
 
     //----------------------------------------------------------------------
     // 聚焦波参数
     //----------------------------------------------------------------------
-    //Real Af = 0.15;       // 谱峰处目标波浪振幅 (m)
-    //Real fp = 0.8;        // 谱峰频率 (Hz) 能量集中的中心频率，决定波浪周期
-    //Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz 频率成分的分布范围，影响波群长度和聚焦程度
-    //int Nf = 31;          // 离散频率数量（奇数可得到对称谱）
-    //Real tf = 5; // 聚焦时刻 (s)
-    //Real xf = 2.0;   // 聚焦位置 (m) - 水槽中央 
-    //WaveFormFunc wave_func = createFocusedWave(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g);
-    //std::cout << "=== Focusing wave: tf = " << tf << ", xf = " << xf << " m" << std::endl;
-    //// 计算初始波面高度（t=0，x=cylinder_x 处）
-    ////Real cylinder_x = 0.3 * DL;
-    //Real cylinder_x = 0.742374;
-    //Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
-    //                                         cylinder_x, 0.0);
-    ////Real cylinder_y = Af*10 + LH + 1;
-    //Real cylinder_y = 2.154995;
-    //cylinder_center = Vecd(cylinder_x, cylinder_y);
+    Real Af = 0.15;       // 谱峰处目标波浪振幅 (m)
+    Real fp = 0.5;        // 谱峰频率 (Hz) 能量集中的中心频率，决定波浪周期
+    Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz 频率成分的分布范围，影响波群长度和聚焦程度
+    int Nf = 31;          // 离散频率数量（奇数可得到对称谱）
+    Real tf = 5; // 聚焦时刻 (s)
+    Real xf = 2.0;   // 聚焦位置 (m) - 水槽中央 
+    WaveFormFunc wave_func = createFocusedWave(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g);
+    std::cout << "=== Focusing wave: tf = " << tf << ", xf = " << xf << " m" << std::endl;
+    // 计算初始波面高度（t=0，x=cylinder_x 处）
+    //Real cylinder_x = 0.3 * DL;
+    Real cylinder_x = 0.742374;
+    Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
+                                             cylinder_x, 0.0);
+    //Real cylinder_y = Af*10 + LH + 1;
+    Real cylinder_y = 2.154995;
+    cylinder_center = Vecd(cylinder_x, cylinder_y);
 
 
 
@@ -560,7 +560,7 @@ int main(int ac, char *av[])
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
     sph_system.setRunParticleRelaxation(false);
     sph_system.setReloadParticles(true);
-    sph_system.setRestartStep(30000);
+    //sph_system.setRestartStep(31000);
     //sph_system.setRunParticleRelaxation(true);
     //sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
@@ -793,6 +793,8 @@ int main(int ac, char *av[])
     body_states_recording.addToWrite<int>(water_block, "Indicator");          // output for debug
     body_states_recording.addToWrite<Vecd>(wall_boundary, "NormalDirection"); // output for debug
     RestartIO restart_io(sph_system);
+    // SPH 的 RestartIO 只负责水、壁面、圆柱等粒子数据；
+    // SimbodyStateEngine 单独负责保存/读取刚体的广义坐标 Q 和广义速度 U。
     SimbodyStateEngine simbody_state_engine(sph_system, MBsystem);
 
     /** WaveProbes. */
@@ -835,12 +837,19 @@ int main(int ac, char *av[])
     Real &physical_time = *sph_system.getSystemVariableDataByName<Real>("PhysicalTime");
     if (sph_system.RestartStep() != 0)
     {
-        // Particle restart restores SPH bodies only.  After release, the rigid-body
-        // coordinates and velocities also have to be restored into the Simbody integrator.
+        // 1) 先读取普通 SPH restart。
+        //    这一步会恢复 WaterBody、WallBoundary、Cylinder、Observer 等粒子位置/速度，
+        //    也会恢复 PhysicalTime。
         physical_time = restart_io.readRestartFiles(sph_system.RestartStep());
+
+        // 2) 根据 restart 时间判断圆柱是否已经释放。
+        //    如果 restart_time >= release_time，后续运动由 Simbody 控制；
+        //    因此必须恢复 Simbody 自己的状态，否则刚体姿态会回到初始状态。
         released = physical_time >= release_time;
         if (released)
         {
+            // Simbody 的 restart 文件与 SPH 粒子 restart 放在同一 restart 文件夹下，
+            // 文件名例如 simbody_rst_30000.xml。
             std::string simbody_restart_file = sph_system.getIOEnvironment().RestartFolder() +
                                                "/simbody_rst_" + std::to_string(sph_system.RestartStep()) + ".xml";
             std::ifstream simbody_restart_stream(simbody_restart_file.c_str());
@@ -848,6 +857,8 @@ int main(int ac, char *av[])
             simbody_restart_stream.close();
             if (has_simbody_restart)
             {
+                // 用当前 integrator 的 state 作为模板，把 XML 里的 Q/U 读进去，
+                // 然后重新 initialize integrator。这样释放后的角度、位移和速度都能接上。
                 SimTK::State restart_state = integ.getAdvancedState();
                 simbody_state_engine.readStateFromXml(sph_system.RestartStep(), restart_state);
                 restart_state.setTime(physical_time);
@@ -856,6 +867,9 @@ int main(int ac, char *av[])
             }
             else
             {
+                // 兼容旧的 restart：旧文件没有 simbody_rst_*.xml 时，无法严格恢复释放后的刚体状态。
+                // 这里给出警告并用默认 Simbody 姿态 + 初始释放速度继续，便于救算；
+                // 但要精确续算，应从释放前 restart 重跑一次，让程序生成新的 Simbody restart。
                 std::cout << "\n Warning: missing Simbody restart file " << simbody_restart_file
                           << ". Continue with the default Simbody pose and release velocity; "
                           << "rerun once to generate exact Simbody restart states.\n";
@@ -866,11 +880,14 @@ int main(int ac, char *av[])
                 state_for_update.updU()[2] = initial_speed * sin(initial_angle);
                 MBsystem.realize(state_for_update, SimTK::Stage::Velocity);
             }
+            // 把圆柱粒子重新约束到 Simbody 当前姿态上，避免粒子 restart 与刚体状态不一致。
             constraint_tethered_spot.exec();
         }
 
-        // Re-project the wavemaker to the prescribed analytical state at the restart time.
-        // This keeps wall-particle position and velocity consistent with wave_func(t).
+        // 3) restart 后重新放置造波板。
+        //    注意：这里没有改变波函数，也没有重新造一条波；
+        //    wave_making.exec(0.0) 只是用当前 physical_time 调用 wave_func(t)，
+        //    把造波板粒子的位置和速度强制改成解析值，保证续算和不续算一致。
         wave_making.exec(0.0);
         front_center_position_data[0] = getSimbodyStationPosition(
             tethered_spot, integ.getAdvancedState(), initial_front_center_position, initial_body_origin);
@@ -894,22 +911,30 @@ int main(int ac, char *av[])
     size_t number_of_iterations = sph_system.RestartStep();
     int screen_output_interval = 100; 
     int observation_sample_interval = screen_output_interval * 1;
-    int restart_output_interval = screen_output_interval * 10;
-    Real end_time = release_time+0.15;
+    int restart_output_interval = screen_output_interval * 50;
+    Real end_time = release_time+0.10;
 
     // 计算释放前和释放后的输出间隔。
-    // 释放后的 VTP 输出固定锚定在 release_time，避免 restart 或时间步截断导致漂移。
+    // 释放前：按 release_time / pre_output_count 输出。
+    // 释放后：固定从 release_time 开始计时，例如 13.0 + 0.0075, 13.0 + 2*0.0075 ...
+    // 这样不会因为前面某一步时间略微跨过输出点而把后续输出整体推迟。
     Real pre_interval = release_time / pre_output_count;
     Real output_interval_vtp = (end_time - release_time) / post_output_count;
     Real output_interval_force = (end_time - release_time) / post_froce_output_count;
     
     Real next_vtp_output = pre_interval;     // 释放前第一个 VTP 输出时刻
     Real next_force_output = end_time + 1.0; // 初始时力输出不启用（设为大值）
+
+    // 返回 current_time 之后的下一个 interval 整数倍时刻。
+    // 用于释放前输出：0.1, 0.2, 0.3, ...
     auto nextMultipleTime = [](Real interval, Real current_time) -> Real
     {
         return (std::floor(current_time / interval) + 1.0) * interval;
     };
 
+    // 返回 current_time 之后的下一个锚定输出时刻。
+    // first_time 是第一帧输出时间；后面每帧都按 first_time + n * interval 排列。
+    // 用于释放后输出：release_time + interval, release_time + 2*interval, ...
     auto nextAnchoredTime = [](Real first_time, Real interval, Real current_time) -> Real
     {
         if (current_time < first_time)
@@ -917,6 +942,9 @@ int main(int ac, char *av[])
         return first_time + (std::floor((current_time - first_time) / interval) + 1.0) * interval;
     };
 
+    // 当前输出完成后，推进到下一次输出时间。
+    // 如果当前时间已经超过多个输出点，则直接跳到 current_time 后面的第一个输出点，
+    // 但仍保持原来的固定时间表，不再使用 "physical_time + interval" 造成漂移。
     auto advanceScheduledTime = [](Real &scheduled_time, Real interval, Real current_time)
     {
         scheduled_time += interval;
@@ -927,6 +955,8 @@ int main(int ac, char *av[])
         }
     };
 
+    // restart 后根据当前是否已经释放，重新计算下一次 VTP/force 输出时间。
+    // 这只影响输出排程，不改变流体、造波或刚体动力学。
     auto resetOutputSchedule = [&]()
     {
         if (released)
@@ -941,6 +971,9 @@ int main(int ac, char *av[])
         }
     };
 
+    // 真正释放圆柱的地方。
+    // 只在 released 从 false 变为 true 的那一刻执行一次：
+    // 设置 Simbody 初始速度，并把释放后的 VTP/force 输出表锚定到 release_time。
     auto releaseCylinder = [&]()
     {
         if (released)
@@ -984,8 +1017,10 @@ int main(int ac, char *av[])
 
     while (physical_time < end_time)
     {
-        // Each outer pass integrates exactly to the next event: VTP output, force output,
-        // release time, or end_time.  Treating release_time as an event prevents delayed release.
+        // 这一轮只积分到“下一个事件”：
+        // 可能是 VTP 输出、力输出、release_time 或 end_time。
+  
+        // 不会等到下一次 VTP/屏幕输出才发现已经过了释放时间。
         Real next_event_time = end_time;
         next_event_time = std::min(next_event_time, next_vtp_output);
         if (!released)
@@ -1011,8 +1046,9 @@ int main(int ac, char *av[])
 
             while (relaxation_time < Dt && integration_time < target_time && physical_time < end_time)
             {
-                // Clip the acoustic step to the remaining event time so the solver does not
-                // step across release_time or a scheduled output time.
+                // 原来的 dt 只受流体声学时间步和 Dt 限制，可能一步跨过 release_time。
+                // 这里把 dt 再限制到 target_time 剩余量，保证不会跨过释放时刻或输出时刻。
+                // 注意：这不改变控制方程，只是把最后一个小步截短到事件边界。
                 Real remaining_relaxation_time = Dt - relaxation_time;
                 Real remaining_integration_time = target_time - integration_time;
                 Real remaining_physical_time = end_time - physical_time;
@@ -1058,7 +1094,8 @@ int main(int ac, char *av[])
                 if (number_of_iterations % restart_output_interval == 0)
                 {
                     restart_io.writeToFile(number_of_iterations);
-                    // Simbody state is written beside the SPH particle restart files.
+                    // 同一次 restart 同时写 SPH 粒子状态和 Simbody 刚体状态；
+                    // 以后从释放后的 restart 继续算时，两边才能对上。
                     simbody_state_engine.writeStateToXml((int)number_of_iterations, integ);
                 }
             }
@@ -1096,6 +1133,7 @@ int main(int ac, char *av[])
             TickCount t5 = TickCount::now();
             interval += t5 - t4; 
             Real current_vtp_interval = released ? output_interval_vtp : pre_interval;
+            // 写完这一帧后，推进到固定时间表上的下一帧 VTP 输出。
             advanceScheduledTime(next_vtp_output, current_vtp_interval, physical_time);
         }
 
@@ -1129,6 +1167,7 @@ int main(int ac, char *av[])
 
             TickCount t3 = TickCount::now();
             interval += t3 - t2; 
+            // 写完这一帧力/summary 后，推进到固定时间表上的下一帧力输出。
             advanceScheduledTime(next_force_output, output_interval_force, physical_time);
         }
     }
