@@ -72,7 +72,7 @@ inline WaveFormFunc createBiChromaticWaveFromSteepness(Real f1, Real delta_f, Re
 
 // ---------- 4. 聚焦波（高斯谱 + 聚焦条件） ----------
 // 参数:
-//   Af        - 谱峰处对应的目标波浪振幅 (m)（即波高的一半）
+//   Af        - 聚焦波群的包络振幅尺度 (m)
 //   fp        - 谱峰频率 (Hz)
 //   bandwidth - 频率带宽 (Hz)，频率范围为 [fp - bandwidth/2, fp + bandwidth/2]
 //   Nf        - 离散频率数量（至少为2）
@@ -127,11 +127,14 @@ inline WaveFormFunc createFocusedWave(Real Af, Real fp, Real bandwidth, int Nf,
         Real c0 = omegas[0] / k[0];
         Real travel_time = xf / c0;
         std::cout << "Focus wave: central speed = " << c0 << " m/s, travel time to xf = " << travel_time << " s" << std::endl;
-        Real t_peak = (Pi / 2.0 - phases[0]) / omegas[0];
+        Real t_phase_alignment = -phases[0] / omegas[0];
+        Real t_positive_crest = (-Pi / 2.0 - phases[0]) / omegas[0];
         Real t_expected = tf - xf / (omegas[0] / k[0]);
         std::cout << "First component: omega=" << omegas[0] << ", k=" << k[0]
-                  << ", phase=" << phases[0] << ", t_peak=" << t_peak
-                  << ", expected t_peak=" << t_expected << std::endl;
+                  << ", phase=" << phases[0]
+                  << ", t_phase_alignment=" << t_phase_alignment
+                  << ", t_positive_crest=" << t_positive_crest
+                  << ", expected phase alignment=" << t_expected << std::endl;
     }
 
     return [push_amps, omegas, phases](Real t, Real &disp, Real &vel)
@@ -149,7 +152,7 @@ inline WaveFormFunc createFocusedWave(Real Af, Real fp, Real bandwidth, int Nf,
 
 // ---------- 辅助函数：计算聚焦波在任意时刻、任意位置的波面高度（用于初始条件）----------
 // 参数与 createFocusedWave 完全相同，额外输入位置 x (m) 和时间 t (s)
-// 返回波面高度 η (m)（注意：该函数不涉及推板传递函数，直接输出目标波浪振幅叠加结果）
+// 返回波面高度 η (m)（按当前 cos 推板位移对应的 -sin 波面相位叠加）
 //inline Real evaluateFocusedWaveElevation(Real Af, Real fp, Real bandwidth, int Nf,
 //                                         Real tf, Real xf, Real h, Real g,
 //                                         Real x, Real t)
@@ -222,11 +225,12 @@ inline Real evaluateFocusedWaveElevation(Real Af, Real fp, Real bandwidth, int N
         phases[i] = -omegas[i] * tf + k[i] * xf;
     }
 
-    // 4. 计算给定位置 x、时间 t 的波面高度
+    // 4. 计算给定位置 x、时间 t 的波面高度。
+    // 造波板采用 cos 位移，线性波面与推板速度同相，因此这里采用 -sin 相位。
     Real eta = 0.0;
     for (int i = 0; i < Nf; ++i)
     {
-        eta += target_amps[i] * cos(omegas[i] * t - k[i] * x + phases[i]);
+        eta -= target_amps[i] * sin(omegas[i] * t - k[i] * x + phases[i]);
     }
     return eta;
 }

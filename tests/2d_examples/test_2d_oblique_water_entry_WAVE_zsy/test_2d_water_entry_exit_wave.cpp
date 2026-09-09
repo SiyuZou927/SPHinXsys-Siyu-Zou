@@ -37,7 +37,7 @@ Real particle_spacing_ref = 0.003;    /**< Initial reference particle spacing. *
 Real BW = particle_spacing_ref * 4;    /**< Thickness of tank wall. */
 
 //波浪控制参数
-Real release_time = 8; // 造波时长
+Real release_time = 19.242483731; // 造波时长
 bool released = false; // 是否已释放
 
 // output control parameters
@@ -49,7 +49,7 @@ int post_froce_output_count = 500;  // force output count after release
 Vec2d cylinder_center; /**< 实际将在 main 中计算 */
 
 // 初始速度参数
-Real initial_speed = 70;                        /**< Initial velocity magnitude (m/s). */
+Real initial_speed = 60;                        /**< Initial velocity magnitude (m/s). */
 Real initial_angle = -20 * Pi / 180.0;          /**< Initial velocity angle (radians, negative = downward). */
 Real initial_rotation_angle = -20 * Pi / 180.0; /**< Initial body rotation (radians). */
 Real initial_angular_velocity = 0.0;            // 可选：初始角速度（rad/s）（如果需要旋转入水，可设置）
@@ -66,7 +66,7 @@ Real mu_f = 8.9e-7;      /**< Water dynamics viscosity. */
 //	Wetting parameters
 //----------------------------------------------------------------------
 std::string diffusion_species_name = "Phi";                     //  ϕ∗
-Real diffusion_coeff = 0.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. γ∗ */
+Real diffusion_coeff = 780.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. γ∗ */
 Real fluid_moisture = 1.0;                                   /**< fluid moisture. */
 Real cylinder_moisture = 0.0;                                /**< cylinder moisture. */
 Real wall_moisture = 0.0;                                    /**< wall moisture. */
@@ -126,6 +126,28 @@ Real getCylinderRotationAngle(SimTK::MobilizedBody::Planar &tethered_spot, const
     SimTK::Vec3 angles = rot.convertRotationToBodyFixedXYZ();
     Real angle_from_rot = angles[2]; // z-axis rotation
     return angle_from_rot;          
+}
+
+Real calculateHydrodynamicMomentZ(BaseParticles &particles, const Vec2d &mass_center)
+{
+    Vecd *position = particles.getVariableDataByName<Vecd>("Position");
+    Vecd *viscous_force = particles.getVariableDataByName<Vecd>("ViscousForceFromFluid");
+    Vecd *pressure_force = particles.getVariableDataByName<Vecd>("PressureForceFromFluid");
+    Real moment_z = 0.0;
+    for (size_t i = 0; i < particles.TotalRealParticles(); ++i)
+    {
+        Vec2d displacement = position[i] - mass_center;
+        Vec2d hydrodynamic_force = viscous_force[i] + pressure_force[i];
+        moment_z += displacement[0] * hydrodynamic_force[1] -
+                    displacement[1] * hydrodynamic_force[0];
+    }
+    return moment_z;
+}
+
+bool timeReached(Real current_time, Real event_time)
+{
+    Real tolerance = 100.0 * Eps * std::max(1.0, std::abs(event_time));
+    return current_time >= event_time || event_time - current_time <= tolerance;
 }
 
 Vecd getSimbodyStationPosition(SimTK::MobilizedBody::Planar &mobod, const SimTK::State &state,
@@ -251,7 +273,9 @@ class SummaryOutput
                      << "PressureForceGlobal_X PressureForceGlobal_Y "
                      << "ViscousForceLocalX PressureForceLocalX TotalForceLocalX "
                      << "ViscousForceLocalY PressureForceLocalY TotalForceLocalY "
-                     << "FrontCenterObserver_Position_X FrontCenterObserver_Position_Y\n";
+                     << "FrontCenterObserver_Position_X FrontCenterObserver_Position_Y "
+                     << "MassCenter_X MassCenter_Y Velocity_X Velocity_Y "
+                     << "RotationAngle_Z AngularVelocity_Z HydrodynamicMoment_Z\n";
     }
 
     ~SummaryOutput()
@@ -263,7 +287,12 @@ class SummaryOutput
                    const Vec2d &total_pressure_force_global,
                    Vec2d viscous_local,
                    Vec2d pressure_local,
-                   const Vecd &front_center_position)
+                   const Vecd &front_center_position,
+                   const Vec2d &mass_center,
+                   const Vec2d &velocity,
+                   Real rotation_angle_z,
+                   Real angular_velocity_z,
+                   Real hydrodynamic_moment_z)
 
     {
         Real total_force_local_x = viscous_local[0] + pressure_local[0];
@@ -275,7 +304,11 @@ class SummaryOutput
                      << total_pressure_force_global[0] << " " << total_pressure_force_global[1] << " "
                      << viscous_local[0] << " " << pressure_local[0] << " " << total_force_local_x << " "
                      << viscous_local[1] << " " << pressure_local[1] << " " << total_force_local_y << " "
-                     << front_center_position[0] << " " << front_center_position[1] << "\n";
+                     << front_center_position[0] << " " << front_center_position[1] << " "
+                     << mass_center[0] << " " << mass_center[1] << " "
+                     << velocity[0] << " " << velocity[1] << " "
+                     << rotation_angle_z << " " << angular_velocity_z << " "
+                     << hydrodynamic_moment_z << "\n";
 
         output_file_.flush();
     }
@@ -474,17 +507,20 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     // 规则波参数
     //----------------------------------------------------------------------
-    //Real H = 0.3;     // 波高 (m)
-    //Real T = 2.0;     // 周期 (s)
-    //Real phase = 0.0; // 相位 (rad)
-    //WaveFormFunc wave_func = createRegularWave(H, T, phase, LH, gravity_g);
-    //// 计算初始波面高度和圆柱位置
+    Real H = 0.3;     // 波高 (m)
+    Real T = 2.0;     // 周期 (s)
+    Real phase = 0.0; // 相位 (rad)
+    WaveFormFunc wave_func = createRegularWave(H, T, phase, LH, gravity_g);
+    // 计算初始波面高度和圆柱位置
     //Real cylinder_x = 0.2 * DL;
-    //Real omega = 2.0 * Pi / T;
-    //Real k = solveDispersionEquation(omega, LH, gravity_g);
-    //Real eta0 = 0.5 * H * cos(k * cylinder_x + phase); // 规则波波面
+    Real cylinder_x = 2.032192;
+    Real omega = 2.0 * Pi / T;
+    Real k = solveDispersionEquation(omega, LH, gravity_g);
+    Real eta0 = 0.5 * H * cos(k * cylinder_x + phase); // 规则波波面
+    Real cylinder_y = 2.098921;
     //Real cylinder_y = eta0 + LH + 0.5;
-    //cylinder_center = Vecd(cylinder_x, cylinder_y);
+
+    cylinder_center = Vecd(cylinder_x, cylinder_y);
 
     //----------------------------------------------------------------------
     // 双色波参数
@@ -528,22 +564,22 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     // 聚焦波参数
     //----------------------------------------------------------------------
-    Real Af = 0.15;       // 谱峰处目标波浪振幅 (m)
-    Real fp = 0.5;        // 谱峰频率 (Hz) 能量集中的中心频率，决定波浪周期
-    Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz 频率成分的分布范围，影响波群长度和聚焦程度
-    int Nf = 31;          // 离散频率数量（奇数可得到对称谱）
-    Real tf = 5; // 聚焦时刻 (s)
-    Real xf = 2.0;   // 聚焦位置 (m) - 水槽中央 
-    WaveFormFunc wave_func = createFocusedWave(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g);
-    std::cout << "=== Focusing wave: tf = " << tf << ", xf = " << xf << " m" << std::endl;
-    // 计算初始波面高度（t=0，x=cylinder_x 处）
-    //Real cylinder_x = 0.3 * DL;
-    Real cylinder_x = 0.742374;
-    Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
-                                             cylinder_x, 0.0);
-    //Real cylinder_y = Af*10 + LH + 1;
-    Real cylinder_y = 2.154995;
-    cylinder_center = Vecd(cylinder_x, cylinder_y);
+    //Real Af = 0.15;       // 谱峰处目标波浪振幅 (m)
+    //Real fp = 0.5;        // 谱峰频率 (Hz) 能量集中的中心频率，决定波浪周期
+    //Real bandwidth = 0.6; // 带宽 (Hz)，频率范围 [0.5, 1.1] Hz 频率成分的分布范围，影响波群长度和聚焦程度
+    //int Nf = 31;          // 离散频率数量（奇数可得到对称谱）
+    //Real tf = 5; // 聚焦时刻 (s)
+    //Real xf = 2.0;   // 聚焦位置 (m) - 水槽中央 
+    //WaveFormFunc wave_func = createFocusedWave(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g);
+    //std::cout << "=== Focusing wave: tf = " << tf << ", xf = " << xf << " m" << std::endl;
+    //// 计算初始波面高度（t=0，x=cylinder_x 处）
+    ////Real cylinder_x = 0.3 * DL;
+    //Real cylinder_x = 1.652512;
+    //Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
+    //                                         cylinder_x, 0.0);
+    ////Real cylinder_y = Af*10 + LH + 1;
+    //Real cylinder_y = 2.099092;
+    //cylinder_center = Vecd(cylinder_x, cylinder_y);
 
 
 
@@ -558,10 +594,10 @@ int main(int ac, char *av[])
 
     BoundingBoxd system_domain_bounds(Vec2d(-cavity_length - BW, -BW), Vec2d(DL + BW, DH + BW));
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
-    sph_system.setRunParticleRelaxation(false);
-    sph_system.setReloadParticles(true);
-    //sph_system.setRestartStep(31000);
-    //sph_system.setRunParticleRelaxation(true);
+   sph_system.setRunParticleRelaxation(false);
+   sph_system.setReloadParticles(true); 
+   sph_system.setRestartStep(175000);
+    //sph_system.setRunParticleRelaxation(true); 
     //sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
     //----------------------------------------------------------------------
@@ -731,12 +767,7 @@ int main(int ac, char *av[])
     SolidBodyPartForSimbody cylinder_constraint_area(cylinder, makeShared<MultiPolygonShape>(createSimbodyConstrainShape(cylinder), "cylinder"));
     /** Mass properties of the constrained spot. */
     Vecd tethering_point = cylinder_constraint_area.initial_mass_center_; // 使用实际计算的质心
-    SimTK::MassProperties cylinder_mass_props(
-        cylinder_constraint_area.body_part_mass_properties_->getMass(),       // 保留原质量
-        SimTKVec3(tethering_point[0], tethering_point[1], 0.0),               // 强制质心为tethering_point
-        cylinder_constraint_area.body_part_mass_properties_->getUnitInertia()); // 保留原转动惯量
-
-    SimTK::Body::Rigid tethered_spot_info(cylinder_mass_props);
+    SimTK::Body::Rigid tethered_spot_info(*cylinder_constraint_area.body_part_mass_properties_);
     /** Mobility of the fixed spot. */
     SimTK::MobilizedBody::Weld fixed_spot(matter.Ground(), SimTK::Transform(SimTKVec3(tethering_point[0], tethering_point[1], 0.0)),
                                           fixed_spot_info, SimTK::Transform(SimTKVec3(0)));
@@ -845,7 +876,7 @@ int main(int ac, char *av[])
         // 2) 根据 restart 时间判断圆柱是否已经释放。
         //    如果 restart_time >= release_time，后续运动由 Simbody 控制；
         //    因此必须恢复 Simbody 自己的状态，否则刚体姿态会回到初始状态。
-        released = physical_time >= release_time;
+        released = timeReached(physical_time, release_time);
         if (released)
         {
             // Simbody 的 restart 文件与 SPH 粒子 restart 放在同一 restart 文件夹下，
@@ -911,8 +942,8 @@ int main(int ac, char *av[])
     size_t number_of_iterations = sph_system.RestartStep();
     int screen_output_interval = 100; 
     int observation_sample_interval = screen_output_interval * 1;
-    int restart_output_interval = screen_output_interval * 50;
-    Real end_time = release_time+0.10;
+    int restart_output_interval = screen_output_interval * 40;
+    Real end_time = release_time+0.05;
 
     // 计算释放前和释放后的输出间隔。
     // 释放前：按 release_time / pre_output_count 输出。
@@ -1015,7 +1046,7 @@ int main(int ac, char *av[])
     //	Main loop starts here.
     //----------------------------------------------------------------------
 
-    while (physical_time < end_time)
+    while (!timeReached(physical_time, end_time))
     {
         // 这一轮只积分到“下一个事件”：
         // 可能是 VTP 输出、力输出、release_time 或 end_time。
@@ -1027,9 +1058,11 @@ int main(int ac, char *av[])
             next_event_time = std::min(next_event_time, release_time);
         if (released)
             next_event_time = std::min(next_event_time, next_force_output);
-        Real target_time = std::max(0.0, next_event_time - physical_time);
+        Real target_time = timeReached(physical_time, next_event_time)
+                               ? 0.0
+                               : next_event_time - physical_time;
         Real integration_time = 0.0;
-        while (integration_time < target_time && physical_time < end_time)
+        while (integration_time < target_time && !timeReached(physical_time, end_time))
         {
             time_instance = TickCount::now();
             Real Dt = fluid_advection_time_step.exec();//change Dt
@@ -1044,7 +1077,8 @@ int main(int ac, char *av[])
             Real dt = 0.0;
             viscous_force_from_fluid.exec(); 
 
-            while (relaxation_time < Dt && integration_time < target_time && physical_time < end_time)
+            while (relaxation_time < Dt && integration_time < target_time &&
+                   !timeReached(physical_time, end_time))
             {
                 // 原来的 dt 只受流体声学时间步和 Dt 限制，可能一步跨过 release_time。
                 // 这里把 dt 再限制到 target_time 剩余量，保证不会跨过释放时刻或输出时刻。
@@ -1119,10 +1153,10 @@ int main(int ac, char *av[])
             interval_updating_configuration += TickCount::now() - time_instance;
         }
 
-        if (!released && physical_time >= release_time)
+        if (!released && timeReached(physical_time, release_time))
             releaseCylinder();
 
-        if (physical_time >= next_vtp_output)
+        if (timeReached(physical_time, next_vtp_output))
         {
             TickCount t4 = TickCount::now();
             body_states_recording.writeToFile();
@@ -1137,7 +1171,7 @@ int main(int ac, char *av[])
             advanceScheduledTime(next_vtp_output, current_vtp_interval, physical_time);
         }
 
-        if (released && physical_time >= next_force_output)
+        if (released && timeReached(physical_time, next_force_output))
         {
             TickCount t2 = TickCount::now();
 
@@ -1148,10 +1182,20 @@ int main(int ac, char *av[])
 
             Vec2d total_viscous_force_g = calculate_cylinder_total_viscous_force.exec();
             Vec2d total_pressure_force_g = calculate_cylinder_total_pressure_force.exec();
-            Real current_rotation = getCylinderRotationAngle(tethered_spot, integ.getAdvancedState());
+            SimTK::State current_state = integ.getAdvancedState();
+            MBsystem.realize(current_state, SimTK::Stage::Velocity);
+            Real current_rotation = getCylinderRotationAngle(tethered_spot, current_state);
             Real total_rotation_angle = initial_rotation_angle + current_rotation;
             Vec2d viscous_local = transformGlobalForceToLocal(total_viscous_force_g, total_rotation_angle);
             Vec2d pressure_local = transformGlobalForceToLocal(total_pressure_force_g, total_rotation_angle);
+
+            SimTKVec3 origin = tethered_spot.getBodyOriginLocation(current_state);
+            SimTKVec3 origin_velocity = tethered_spot.getBodyOriginVelocity(current_state);
+            Vec2d mass_center(origin[0], origin[1]);
+            Vec2d velocity(origin_velocity[0], origin_velocity[1]);
+            Real angular_velocity_z = tethered_spot.getBodyAngularVelocity(current_state)[2];
+            Real hydrodynamic_moment_z =
+                calculateHydrodynamicMomentZ(cylinder.getBaseParticles(), mass_center);
 
             Vecd front_center_pos = getSimbodyStationPosition(
                 tethered_spot, integ.getAdvancedState(), initial_front_center_position, initial_body_origin);
@@ -1163,7 +1207,9 @@ int main(int ac, char *av[])
             front_center_position_data[0] = front_center_pos;
             summary_output.writeData(physical_time,
                                      total_viscous_force_g, total_pressure_force_g,
-                                     viscous_local, pressure_local, front_center_pos);
+                                     viscous_local, pressure_local, front_center_pos,
+                                     mass_center, velocity, total_rotation_angle,
+                                     angular_velocity_z, hydrodynamic_moment_z);
 
             TickCount t3 = TickCount::now();
             interval += t3 - t2; 

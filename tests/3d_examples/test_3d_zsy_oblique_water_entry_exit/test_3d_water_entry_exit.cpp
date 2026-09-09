@@ -54,6 +54,28 @@ Vec3d transformGlobalForceToLocal(const Vec3d &global_force, Real rotation_angle
     local_force[2] = global_force[2];
     return local_force;
 }
+
+Real calculateHydrodynamicMomentZ(BaseParticles &particles, const Vec3d &mass_center)
+{
+    Vecd *position = particles.getVariableDataByName<Vecd>("Position");
+    Vecd *viscous_force = particles.getVariableDataByName<Vecd>("ViscousForceFromFluid");
+    Vecd *pressure_force = particles.getVariableDataByName<Vecd>("PressureForceFromFluid");
+    Real moment_z = 0.0;
+    for (size_t i = 0; i < particles.TotalRealParticles(); ++i)
+    {
+        Vec3d displacement = position[i] - mass_center;
+        Vec3d hydrodynamic_force = viscous_force[i] + pressure_force[i];
+        moment_z += displacement[0] * hydrodynamic_force[1] -
+                    displacement[1] * hydrodynamic_force[0];
+    }
+    return moment_z;
+}
+
+bool timeReached(Real current_time, Real event_time)
+{
+    Real tolerance = 100.0 * Eps * std::max(1.0, std::abs(event_time));
+    return current_time >= event_time || event_time - current_time <= tolerance;
+}
 //----------------------------------------------------------------------
 //   观测点定义
 //----------------------------------------------------------------------
@@ -73,7 +95,10 @@ class SummaryOutput3D
                      << "PressureForceGlobal_X PressureForceGlobal_Y PressureForceGlobal_Z   "
                      << "ViscousForceLocal_X ViscousForceLocal_Y ViscousForceLocal_Z   "
                      << "PressureForceLocal_X PressureForceLocal_Y PressureForceLocal_Z   "
-                     << "TotalForceLocal_X TotalForceLocal_Y TotalForceLocal_Z\n"; 
+                     << "TotalForceLocal_X TotalForceLocal_Y TotalForceLocal_Z   "
+                     << "MassCenter_X MassCenter_Y MassCenter_Z   "
+                     << "Velocity_X Velocity_Y Velocity_Z   "
+                     << "RotationAngle_Z AngularVelocity_Z HydrodynamicMoment_Z\n";
     }
 
     void writeData(Real time,
@@ -82,7 +107,12 @@ class SummaryOutput3D
                    const Vecd &pressure_force_global,
                    const Vecd &viscous_force_local,
                    const Vecd &pressure_force_local,
-                   const Vecd &total_force_local) 
+                   const Vecd &total_force_local,
+                   const Vec3d &mass_center,
+                   const Vec3d &velocity,
+                   Real rotation_angle_z,
+                   Real angular_velocity_z,
+                   Real hydrodynamic_moment_z)
     {
         output_file_ << std::scientific << std::setprecision(9)
                      << time << " "
@@ -91,7 +121,11 @@ class SummaryOutput3D
                      << pressure_force_global[0] << " " << pressure_force_global[1] << " " << pressure_force_global[2] << " "
                      << viscous_force_local[0] << " " << viscous_force_local[1] << " " << viscous_force_local[2] << " "
                      << pressure_force_local[0] << " " << pressure_force_local[1] << " " << pressure_force_local[2] << " "
-                     << total_force_local[0] << " " << total_force_local[1] << " " << total_force_local[2] << "\n"; // 新增
+                     << total_force_local[0] << " " << total_force_local[1] << " " << total_force_local[2] << " "
+                     << mass_center[0] << " " << mass_center[1] << " " << mass_center[2] << " "
+                     << velocity[0] << " " << velocity[1] << " " << velocity[2] << " "
+                     << rotation_angle_z << " " << angular_velocity_z << " "
+                     << hydrodynamic_moment_z << "\n";
         output_file_.flush();
     }
   private:
@@ -230,10 +264,10 @@ int main(int ac, char *av[])
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
 
     // 运行配置
-    sph_system.setRunParticleRelaxation(false);
-    sph_system.setReloadParticles(true);
-    //sph_system.setRunParticleRelaxation(true);
-    //sph_system.setReloadParticles(false);
+    //sph_system.setRunParticleRelaxation(false);
+    //sph_system.setReloadParticles(true);
+    sph_system.setRunParticleRelaxation(true);
+    sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
 
     //----------------------------------------------------------------------
@@ -400,14 +434,19 @@ int main(int ac, char *av[])
     SolidBodyPartForSimbody structure_system(floating_object, createSimbodyConstrainShape3D());
     /** Mass properties of the constrained spot. */
     // SimTK::Body::Rigid structure_info(*structure_system.body_part_mass_properties_); // 质量属性
-    Vecd tethering_point = structure_system.initial_mass_center_;       // 系留点使用实际质心
-    SimTK::MassProperties object_mass_props(                            // set tethered spot mass properties
-        structure_system.body_part_mass_properties_->getMass(),         // 保留原质量
-        SimTKVec3(tethering_point[0], tethering_point[1], 0.0),         // 强制质心为tethering_point
-        structure_system.body_part_mass_properties_->getUnitInertia()); // 保留原转动惯量
-    SimTK::Body::Rigid tethered_spot_info(object_mass_props);    
-        /** Mobility of the fixed spot. */
-    SimTK::MobilizedBody::Weld fixed_spot(matter.Ground(), SimTK::Transform(SimTKVec3(tethering_point[0], tethering_point[1], 0.0)),
+    Vecd tethering_point = structure_system.initial_mass_center_; // 系留点使用实际质心
+    // 原写法将全局质心作为刚体局部质量属性中的质心，造成坐标重复计入。
+    // SimTK::MassProperties object_mass_props(
+    //     structure_system.body_part_mass_properties_->getMass(),
+    //     SimTKVec3(tethering_point[0], tethering_point[1], 0.0),
+    //     structure_system.body_part_mass_properties_->getUnitInertia());
+    // SimTK::Body::Rigid tethered_spot_info(object_mass_props);
+    SimTK::Body::Rigid tethered_spot_info(*structure_system.body_part_mass_properties_);
+    /** Mobility of the fixed spot. */
+    // 原写法忽略了三维质心的 z 坐标。
+    // SimTK::MobilizedBody::Weld fixed_spot(matter.Ground(), SimTK::Transform(SimTKVec3(tethering_point[0], tethering_point[1], 0.0)),
+    //                                       fixed_spot_info, SimTK::Transform(SimTKVec3(0)));
+    SimTK::MobilizedBody::Weld fixed_spot(matter.Ground(), SimTK::Transform(SimTKVec3(tethering_point[0], tethering_point[1], tethering_point[2])),
                                           fixed_spot_info, SimTK::Transform(SimTKVec3(0)));
 
     Vecd displacement0 = structure_system.initial_mass_center_ - tethering_point;
@@ -482,9 +521,9 @@ int main(int ac, char *av[])
     size_t number_of_iterations = 0;
     int screen_output_interval = 1;
     int observation_sample_interval = screen_output_interval * 1;
-    Real end_time = 0.009; 
+    Real end_time = 0.012;
     Real output_interval_vtp = end_time / 12.0;
-    Real output_interval_force = end_time / 500.0;
+    Real output_interval_force = end_time / 300.0;
     Real next_force_output = output_interval_force;
     Real next_vtp_output = output_interval_vtp;
     //----------------------------------------------------------------------
@@ -507,16 +546,15 @@ int main(int ac, char *av[])
     //----------------------------------------------------------------------
     //  Main loop
     //----------------------------------------------------------------------
-    while (physical_time < end_time)
+    while (!timeReached(physical_time, end_time))
     {
-        Real next_output_time = std::min(next_force_output, next_vtp_output);
-        Real time_to_output = next_output_time - physical_time;
-        if (time_to_output < 0)
-            time_to_output = 0.0;
-        Real target_time = std::min(time_to_output, end_time - physical_time);
+        Real next_event_time = std::min(end_time, std::min(next_force_output, next_vtp_output));
+        Real target_time = timeReached(physical_time, next_event_time)
+                               ? 0.0
+                               : next_event_time - physical_time;
         Real integration_time = 0.0;
 
-        while (integration_time < target_time)
+        while (integration_time < target_time && !timeReached(physical_time, end_time))
         {
             time_instance = TickCount::now();
             Real Dt = fluid_advection_time_step.exec();
@@ -530,16 +568,18 @@ int main(int ac, char *av[])
             Real relaxation_time = 0.0;
             Real dt = 0.0;
             viscous_force_from_fluid.exec();
-            while (relaxation_time < Dt)
+            while (relaxation_time < Dt && integration_time < target_time &&
+                   !timeReached(physical_time, end_time))
             {
                 /** inner loop for dual-time criteria time-stepping.*/
-                dt = SMIN(SMIN(dt_thermal, fluid_acoustic_time_step.exec()), Dt);
-                // 防止dt为0或负值
-                if (dt < 1e-12)
-                {
-                    std::cerr << "Warning: dt too small: " << dt << std::endl;
-                    dt = 1e-9;
-                }
+                Real remaining_relaxation_time = Dt - relaxation_time;
+                Real remaining_integration_time = target_time - integration_time;
+                Real remaining_physical_time = end_time - physical_time;
+                if (remaining_relaxation_time <= TinyReal || remaining_integration_time <= TinyReal ||
+                    remaining_physical_time <= TinyReal)
+                    break;
+                dt = SMIN(dt_thermal, fluid_acoustic_time_step.exec(), remaining_relaxation_time,
+                          remaining_integration_time, remaining_physical_time);
 
                 fluid_pressure_relaxation.exec(dt);
                 pressure_force_from_fluid.exec();
@@ -598,7 +638,7 @@ int main(int ac, char *av[])
                 interval_updating_configuration += TickCount::now() - time_instance;
         }
 
-        if (physical_time >= next_force_output)
+        if (timeReached(physical_time, next_force_output))
         {
             TickCount t2 = TickCount::now();
             viscous_force_from_fluid.exec();
@@ -619,6 +659,14 @@ int main(int ac, char *av[])
             MBsystem.realize(current_state, SimTK::Stage::Velocity); // 确保状态已实现
             Real rotation_angle_z = initial_pitch_angle + getObjectRotationAngle(structure_mob, current_state);
 
+            SimTKVec3 origin = structure_mob.getBodyOriginLocation(current_state);
+            SimTKVec3 origin_velocity = structure_mob.getBodyOriginVelocity(current_state);
+            Vec3d mass_center(origin[0], origin[1], origin[2]);
+            Vec3d velocity(origin_velocity[0], origin_velocity[1], origin_velocity[2]);
+            Real angular_velocity_z = structure_mob.getBodyAngularVelocity(current_state)[2];
+            Real hydrodynamic_moment_z =
+                calculateHydrodynamicMomentZ(object_particles, mass_center);
+
             // 将全局力转换到局部坐标系
             Vecd viscous_force_local = transformGlobalForceToLocal(total_viscous_force_global, rotation_angle_z);
             Vecd pressure_force_local = transformGlobalForceToLocal(total_pressure_force_global, rotation_angle_z);
@@ -631,12 +679,17 @@ int main(int ac, char *av[])
                                      total_pressure_force_global,
                                      viscous_force_local,
                                      pressure_force_local,
-                                     total_force_local); 
+                                     total_force_local,
+                                     mass_center,
+                                     velocity,
+                                     rotation_angle_z,
+                                     angular_velocity_z,
+                                     hydrodynamic_moment_z);
             TickCount t3 = TickCount::now();
             interval += t3 - t2;
             next_force_output += output_interval_force;
         }
-        if (physical_time >= next_vtp_output)
+        if (timeReached(physical_time, next_vtp_output))
         {
             TickCount t4 = TickCount::now();
 
