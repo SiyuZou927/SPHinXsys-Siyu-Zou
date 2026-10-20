@@ -19,14 +19,14 @@ Vec2d centroid(0.0, 0.0);       /**< 圆柱质心位置（相对于圆柱中心�
 Real DL = 4;                                              /**< Water tank length. */
 Real DH = 5;                                              /**< Water tank height. */
 Real LH = 2;                                              /**< Water column height. */
-Real particle_spacing_ref = 0.003;                        /**< Initial reference particle spacing. */
+Real particle_spacing_ref = 0.005;                        /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4;                       /**< Thickness of tank wall. */
 Vec2d cylinder_center(0.45 * DL, LH + 0.2);               /**< Location of the cylinder center. */
 
 // 初始速度参数
-Real initial_speed = 70;                        /**< Initial velocity magnitude (m/s). */
-Real initial_angle = -40 * Pi / 180.0;          /**< Initial velocity angle (radians, negative = downward). */
-Real initial_rotation_angle = -40 * Pi / 180.0; /**< Initial body rotation (radians). */
+Real initial_speed = 60;                        /**< Initial velocity magnitude (m/s). */
+Real initial_angle = -20 * Pi / 180.0;          /**< Initial velocity angle (radians, negative = downward). */
+Real initial_rotation_angle = -20 * Pi / 180.0; /**< Initial body rotation (radians). */
 //Real initial_angular_velocity = 0.0; // 可选：初始角速度（rad/s）（如果需要旋转入水，可设置）
 //----------------------------------------------------------------------
 //	Material parameters.
@@ -34,8 +34,8 @@ Real initial_rotation_angle = -40 * Pi / 180.0; /**< Initial body rotation (radi
 Real rho0_f = 1.0;     /**< Fluid density. */
 Real rho0_s = 2.063;   /**< Cylinder density. */
 Real gravity_g = 9.81; /**< Gravity. */
-Real U_max = 2.0 * sqrt(gravity_g * LH); /**< Characteristic velocity. */
-Real c_f = 10.0 * U_max; /**< Reference sound speed. */
+Real U_max = initial_speed ; /**< Characteristic velocity. */
+Real c_f = 10 * U_max;      /**< 10*Reference sound speed.40.0 * U_max */
 Real mu_f = 8.9e-7;      /**< Water dynamics viscosity. */
 //----------------------------------------------------------------------
 //	Wetting parameters

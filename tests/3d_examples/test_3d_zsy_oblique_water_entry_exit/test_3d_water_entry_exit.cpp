@@ -16,11 +16,11 @@ Real DW = 0.4; /**< Water tank width. */
 Real DH = 1.0; /**< Water tank height. */
 Real LH = 0.5; /**< Water column height. */
 
-Real particle_spacing_ref = 0.003;   /**< Initial reference particle spacing. */
+Real particle_spacing_ref = 0.005;   /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4; /**< Thickness of tank wall. */
 Vecd object_center(0.46, LH + 0.028, DW / 2); /**< Location of the object center. */
 
-Real initial_speed = 70.0;                     /**< Initial velocity magnitude (m/s). */
+Real initial_speed = 50.0;                     /**< Initial velocity magnitude (m/s). */
 Real initial_angle = -20.0 * Pi / 180.0;       /**< Initial velocity angle (radians, negative = downward). */
 Real initial_pitch_angle = -20.0 * Pi / 180.0; /**< Initial pitch angle about Z-axis(radians). */
 std::string full_path_to_file = "./input/M1TR4Z02H05.stl"; // model file path
@@ -30,14 +30,14 @@ std::string full_path_to_file = "./input/M1TR4Z02H05.stl"; // model file path
 Real rho0_f = 1.00;                         /**< Fluid density (water). */
 Real rho0_s = 2.063;                         /**< Object density. */
 Real gravity_g = 9.81;                        /**< Gravity. */
-Real U_max =10.95; /**< Characteristic velocity. */
+Real U_max = initial_speed;                  /**< Characteristic velocity. */
 Real c_f = 10.0 * U_max;                      /**< Reference sound speed. */
 Real mu_f = 8.9e-7;                           /**< Water dynamics viscosity (Pa·s). */
 //----------------------------------------------------------------------
 //  Wetting parameters
 //----------------------------------------------------------------------
 std::string diffusion_species_name = "Phi";
-Real diffusion_coeff = 25.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. */
+Real diffusion_coeff = 0.0 * pow(particle_spacing_ref, 2); /**< Wetting coefficient. */
 Real fluid_moisture = 1.0;                                   /**< fluid moisture. */
 Real object_moisture = 0.0;                                  /**< object moisture. */
 Real wall_moisture = 1.0;                                    /**< wall moisture. */
@@ -264,10 +264,10 @@ int main(int ac, char *av[])
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
 
     // 运行配置
-    //sph_system.setRunParticleRelaxation(false);
-    //sph_system.setReloadParticles(true);
-    sph_system.setRunParticleRelaxation(true);
-    sph_system.setReloadParticles(false);
+    sph_system.setRunParticleRelaxation(false);
+    sph_system.setReloadParticles(true);
+    //sph_system.setRunParticleRelaxation(true);
+    //sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
 
     //----------------------------------------------------------------------

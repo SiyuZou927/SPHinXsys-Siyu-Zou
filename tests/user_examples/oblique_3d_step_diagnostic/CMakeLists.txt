@@ -1,0 +1,2 @@
+add_executable(oblique_3d_step_diagnostic diagnostic_main.cpp)
+target_link_libraries(oblique_3d_step_diagnostic PRIVATE sphinxsys_3d)

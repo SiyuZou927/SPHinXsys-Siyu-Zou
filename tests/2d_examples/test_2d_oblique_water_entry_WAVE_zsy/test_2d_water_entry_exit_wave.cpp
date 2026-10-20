@@ -33,25 +33,25 @@ Real DL = 8;                         /**< Water tank length. */
 Real DH = 5;                        /**< Water tank height. */
 Real LH = 2;                         /**< Water column height. */
 Real cavity_length = 1;             // leftover length for wave development
-Real particle_spacing_ref = 0.003;    /**< Initial reference particle spacing. */
+Real particle_spacing_ref = 0.005;    /**< Initial reference particle spacing. */
 Real BW = particle_spacing_ref * 4;    /**< Thickness of tank wall. */
 
 //波浪控制参数
-Real release_time = 19.242483731; // 造波时长
+Real release_time = 19.035402275; // 造波时长
 bool released = false; // 是否已释放
 
 // output control parameters
 int pre_output_count = release_time*10;// vtp output count before release
-int post_output_count = 20;        // vtp output count after release
-int post_froce_output_count = 500;  // force output count after release
+int post_output_count = 50;        // vtp output count after release
+int post_froce_output_count = 1000;  // force output count after release
 
 // 圆柱初始位置（根据波浪动态调整）
 Vec2d cylinder_center; /**< 实际将在 main 中计算 */
 
 // 初始速度参数
-Real initial_speed = 60;                        /**< Initial velocity magnitude (m/s). */
-Real initial_angle = -20 * Pi / 180.0;          /**< Initial velocity angle (radians, negative = downward). */
-Real initial_rotation_angle = -20 * Pi / 180.0; /**< Initial body rotation (radians). */
+Real initial_speed = 70;                        /**< Initial velocity magnitude (m/s). */
+Real initial_angle = -40 * Pi / 180.0;          /**< Initial velocity angle (radians, negative = downward). */
+Real initial_rotation_angle = -40 * Pi / 180.0; /**< Initial body rotation (radians). */
 Real initial_angular_velocity = 0.0;            // 可选：初始角速度（rad/s）（如果需要旋转入水，可设置）
 //----------------------------------------------------------------------
 //	Material parameters.
@@ -59,7 +59,7 @@ Real initial_angular_velocity = 0.0;            // 可选：初始角速度（ra
 Real rho0_f = 1.0;                       /**< Fluid density. */
 Real rho0_s = 2.063;                     /**< Cylinder density. */
 Real gravity_g = 9.81;                   /**< Gravity. */
-Real U_max = 2.0 * sqrt(gravity_g * LH); /**< Characteristic velocity. */
+Real U_max = initial_speed;              /**< Characteristic velocity initial_speed.2.0 * sqrt(gravity_g * LH) */
 Real c_f = 10.0 * U_max; /**< Reference sound speed. */
 Real mu_f = 8.9e-7;      /**< Water dynamics viscosity. */
 //----------------------------------------------------------------------
@@ -513,11 +513,11 @@ int main(int ac, char *av[])
     WaveFormFunc wave_func = createRegularWave(H, T, phase, LH, gravity_g);
     // 计算初始波面高度和圆柱位置
     //Real cylinder_x = 0.2 * DL;
-    Real cylinder_x = 2.032192;
+    Real cylinder_x = 1.460563;
     Real omega = 2.0 * Pi / T;
     Real k = solveDispersionEquation(omega, LH, gravity_g);
     Real eta0 = 0.5 * H * cos(k * cylinder_x + phase); // 规则波波面
-    Real cylinder_y = 2.098921;
+    Real cylinder_y = 2.182746;
     //Real cylinder_y = eta0 + LH + 0.5;
 
     cylinder_center = Vecd(cylinder_x, cylinder_y);
@@ -574,20 +574,20 @@ int main(int ac, char *av[])
     //std::cout << "=== Focusing wave: tf = " << tf << ", xf = " << xf << " m" << std::endl;
     //// 计算初始波面高度（t=0，x=cylinder_x 处）
     ////Real cylinder_x = 0.3 * DL;
-    //Real cylinder_x = 1.652512;
+    //Real cylinder_x = 2.184221;
     //Real eta0 = evaluateFocusedWaveElevation(Af, fp, bandwidth, Nf, tf, xf, LH, gravity_g,
     //                                         cylinder_x, 0.0);
     ////Real cylinder_y = Af*10 + LH + 1;
-    //Real cylinder_y = 2.099092;
+    //Real cylinder_y = 2.100167;
     //cylinder_center = Vecd(cylinder_x, cylinder_y);
 
-
-
-    std::cout << "Cylinder initial position: (" << cylinder_center[0] << ", " << cylinder_center[1] << ")" << std::endl;
     front_center_observer_location = {resetFrontCenterObserverPosition()}; // 更新依赖 cylinder_center 的观测点位置
-    std::cout << "Cylinder observer position: ("
-              << front_center_observer_location[0][0] << ", "
-              << front_center_observer_location[0][1] << ")" << std::endl;
+
+    //std::cout << "Cylinder initial position: (" << cylinder_center[0] << ", " << cylinder_center[1] << ")" << std::endl;
+    //
+    //std::cout << "Cylinder observer position: ("
+    //          << front_center_observer_location[0][0] << ", "
+    //          << front_center_observer_location[0][1] << ")" << std::endl;
     //----------------------------------------------------------------------
     //	Build up an SPHSystem.
     //----------------------------------------------------------------------
@@ -596,7 +596,7 @@ int main(int ac, char *av[])
     SPHSystem sph_system(system_domain_bounds, particle_spacing_ref);
    sph_system.setRunParticleRelaxation(false);
    sph_system.setReloadParticles(true); 
-   sph_system.setRestartStep(175000);
+   sph_system.setRestartStep(104000);
     //sph_system.setRunParticleRelaxation(true); 
     //sph_system.setReloadParticles(false);
     sph_system.handleCommandlineOptions(ac, av);
@@ -942,7 +942,7 @@ int main(int ac, char *av[])
     size_t number_of_iterations = sph_system.RestartStep();
     int screen_output_interval = 100; 
     int observation_sample_interval = screen_output_interval * 1;
-    int restart_output_interval = screen_output_interval * 40;
+    int restart_output_interval = screen_output_interval * 20;
     Real end_time = release_time+0.05;
 
     // 计算释放前和释放后的输出间隔。

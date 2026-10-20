@@ -1,0 +1,2 @@
+add_executable(oblique_entry_batch batch_main.cpp)
+target_link_libraries(oblique_entry_batch PRIVATE sphinxsys_2d)
